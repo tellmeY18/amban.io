@@ -1,0 +1,84 @@
+/* ============================================================
+ * amban.io — Ionic Variable Mapping
+ * Maps Ionic's CSS custom properties onto amban design tokens.
+ * Components should reference amban tokens directly; this file
+ * exists so built-in Ionic components inherit the amban look.
+ * ============================================================ */
+
+:root {
+  /* ---------- Primary ---------- */
+  --ion-color-primary: var(--color-primary);
+  --ion-color-primary-rgb: 26, 115, 232;
+  --ion-color-primary-contrast: #ffffff;
+  --ion-color-primary-contrast-rgb: 255, 255, 255;
+  --ion-color-primary-shade: var(--color-primary-dark);
+  --ion-color-primary-tint: var(--color-primary-light);
+
+  /* ---------- Background & text ---------- */
+  --ion-background-color: var(--color-bg);
+  --ion-background-color-rgb: 248, 249, 250;
+  --ion-text-color: var(--color-text-primary);
+  --ion-text-color-rgb: 32, 33, 36;
+
+  /* ---------- Surfaces / cards ---------- */
+  --ion-card-background: var(--color-surface);
+  --ion-item-background: var(--color-surface);
+  --ion-toolbar-background: var(--color-surface);
+  --ion-tab-bar-background: var(--color-surface);
+
+  /* ---------- Borders ---------- */
+  --ion-border-color: var(--color-divider);
+
+  /* ---------- Typography ---------- */
+  --ion-font-family: var(--font-body);
+
+  /* ---------- Status colors ---------- */
+  --ion-color-success: var(--color-score-excellent);
+  --ion-color-success-rgb: 30, 140, 69;
+  --ion-color-success-contrast: #ffffff;
+
+  --ion-color-warning: var(--color-score-good);
+  --ion-color-warning-rgb: 242, 153, 0;
+  --ion-color-warning-contrast: #ffffff;
+
+  --ion-color-danger: var(--color-score-warning);
+  --ion-color-danger-rgb: 233, 66, 53;
+  --ion-color-danger-contrast: #ffffff;
+}
+
+/* ============================================================
+ * Dark mode — nudge Ionic's variables so they match amban's
+ * dark surfaces exactly. Two selectors:
+ *   1. Explicit <html data-theme="dark"> override.
+ *   2. OS preference when the user hasn't forced light mode.
+ * They're split into two rule blocks because a comma-combined
+ * selector cannot contain an @media query.
+ * ============================================================ */
+
+:root[data-theme="dark"] {
+  --ion-background-color: var(--color-bg);
+  --ion-background-color-rgb: 18, 18, 18;
+  --ion-text-color: var(--color-text-primary);
+  --ion-text-color-rgb: 232, 234, 237;
+
+  --ion-card-background: var(--color-surface);
+  --ion-item-background: var(--color-surface);
+  --ion-toolbar-background: var(--color-surface);
+  --ion-tab-bar-background: var(--color-surface);
+  --ion-border-color: var(--color-divider);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ion-background-color: var(--color-bg);
+    --ion-background-color-rgb: 18, 18, 18;
+    --ion-text-color: var(--color-text-primary);
+    --ion-text-color-rgb: 232, 234, 237;
+
+    --ion-card-background: var(--color-surface);
+    --ion-item-background: var(--color-surface);
+    --ion-toolbar-background: var(--color-surface);
+    --ion-tab-bar-background: var(--color-surface);
+    --ion-border-color: var(--color-divider);
+  }
+}

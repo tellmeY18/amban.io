@@ -1,0 +1,42 @@
+# Build artifacts
+dist/
+build/
+out/
+coverage/
+
+# Dependencies
+node_modules/
+
+# Capacitor generated
+ios/App/App/public/
+android/app/src/main/assets/public/
+android/app/src/main/assets/capacitor.config.json
+android/app/src/main/assets/capacitor.plugins.json
+.capacitor/
+
+# Lockfiles — keep as-is
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
+
+# Fonts shipped as-is
+**/@fontsource/**
+
+# License text
+LICENSE
+
+# Docs that are authored by hand with deliberate formatting
+CLAUDE.md
+ROADMAP.md
+CHANGELOG.md
+
+# SQL migrations — formatter can mangle intentional alignment
+src/db/migrations/*.sql
+
+# Generated type declarations
+*.d.ts
+
+# Editor & OS
+.DS_Store
+.idea/
+.vscode/

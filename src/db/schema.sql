@@ -1,0 +1,26 @@
+-- ============================================================
+-- amban.io — schema.sql
+--
+-- This file is intentionally a pointer, not the schema itself.
+--
+-- The authoritative schema lives in the migrations pipeline:
+--
+--     src/db/migrations/001_init.sql
+--
+-- plus every subsequent numbered migration (002_*.sql, 003_*.sql, …).
+--
+-- Why: per CLAUDE.md Appendix J, migrations are first-class. The DB
+-- is always constructed by running every migration in order inside
+-- a single transaction — never by applying a "current" schema file
+-- directly. Shipping a separate always-current schema here would be
+-- a second source of truth that inevitably drifts.
+--
+-- If you're looking for:
+--   * the table definitions      → migrations/001_init.sql
+--   * the migration strategy     → CLAUDE.md Appendix J
+--   * the data model reference   → CLAUDE.md §5
+--   * the reset behaviour        → CLAUDE.md Appendix I
+--
+-- Do NOT add CREATE TABLE statements to this file. Create a new
+-- numbered migration instead.
+-- ============================================================

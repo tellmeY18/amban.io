@@ -1,0 +1,36 @@
+# EditorConfig — https://editorconfig.org
+# Keeps whitespace, line endings, and charset consistent across editors
+# for every contributor to amban.io.
+
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+[*.md]
+# Preserve intentional double-trailing-space line breaks in Markdown.
+trim_trailing_whitespace = false
+max_line_length = 80
+
+[*.{sql,sql.txt}]
+indent_size = 2
+# Migrations use intentional alignment; don't let the editor re-wrap.
+max_line_length = off
+
+[Makefile]
+indent_style = tab
+
+[*.{yml,yaml}]
+indent_size = 2
+
+[{package.json,package-lock.json,tsconfig*.json,*.code-workspace}]
+indent_size = 2
+
+[LICENSE]
+insert_final_newline = false
+trim_trailing_whitespace = false

@@ -1,0 +1,7 @@
+{
+  "name": ".tmp-amban",
+  "integrations": {
+    "capacitor": {}
+  },
+  "type": "react-vite"
+}

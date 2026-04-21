@@ -1,0 +1,103 @@
+# ============================================================
+# amban.io — Continuous Integration
+#
+# What this pipeline guarantees for every push and PR to main:
+#   1. The code typechecks under TypeScript strict mode.
+#   2. The code passes ESLint, including the privacy gate that
+#      forbids fetch / XHR / analytics SDKs (see eslint.config.js
+#      and CLAUDE.md §12).
+#   3. The code is Prettier-clean.
+#   4. The web build succeeds.
+#   5. A belt-and-braces grep over the produced bundle fails
+#      the job if forbidden network symbols slipped through.
+#
+# Keep this file boring. No caching fanciness beyond npm's built-in
+# cache. No test matrix (testing is owned outside the roadmap).
+# ============================================================
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Typecheck, lint, format, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Format check
+        run: npm run format:check
+
+      - name: Build
+        run: npm run build
+
+      # ------------------------------------------------------------
+      # Privacy gate — double-check the built bundle.
+      # ESLint catches source-level offences; this step catches
+      # anything a transitive dependency tried to smuggle in.
+      # See CLAUDE.md §12 and README "Privacy-as-Code".
+      # ------------------------------------------------------------
+      - name: Privacy gate — no network symbols in bundle
+        run: |
+          set -euo pipefail
+
+          if [ ! -d dist ]; then
+            echo "::error::dist/ not found after build — cannot verify bundle."
+            exit 1
+          fi
+
+          FORBIDDEN_PATTERNS=(
+            "sentry.io"
+            "mixpanel.com"
+            "amplitude.com"
+            "posthog.com"
+            "firebaseio.com"
+            "googleanalytics"
+            "google-analytics"
+            "segment.io"
+          )
+
+          FOUND=0
+          for pattern in "${FORBIDDEN_PATTERNS[@]}"; do
+            if grep -r --include='*.js' --include='*.css' --include='*.html' -l -- "$pattern" dist >/dev/null 2>&1; then
+              echo "::error::Forbidden network reference '$pattern' found in dist/ — see CLAUDE.md §12."
+              grep -r --include='*.js' --include='*.css' --include='*.html' -l -- "$pattern" dist || true
+              FOUND=1
+            fi
+          done
+
+          if [ "$FOUND" -ne 0 ]; then
+            exit 1
+          fi
+
+          echo "Privacy gate passed — no forbidden network symbols in built bundle."

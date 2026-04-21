@@ -1,0 +1,170 @@
+/* ============================================================
+ * amban.io — Design Tokens
+ * Source of truth: CLAUDE.md §3
+ * All colors, spacing, typography, radii, and shadows live here.
+ * Ionic CSS variables are mapped against these in variables.css.
+ * ============================================================ */
+
+:root {
+  /* ---------- Colors: Primary ---------- */
+  --color-primary: #1a73e8;
+  --color-primary-light: #e8f0fe;
+  --color-primary-dark: #1557b0;
+
+  /* ---------- Colors: Score (applied dynamically) ---------- */
+  --color-score-excellent: #1e8c45;
+  --color-score-good: #f29900;
+  --color-score-warning: #e94235;
+
+  /* ---------- Colors: Surfaces ---------- */
+  --color-bg: #f8f9fa;
+  --color-surface: #ffffff;
+  --color-surface-variant: #f1f3f4;
+
+  /* ---------- Colors: Text ---------- */
+  --color-text-primary: #202124;
+  --color-text-secondary: #5f6368;
+  --color-text-disabled: #bdc1c6;
+
+  /* ---------- Colors: Divider ---------- */
+  --color-divider: #e0e0e0;
+
+  /* ---------- Colors: Category (see Appendix C) ---------- */
+  --color-cat-housing: #4285f4;
+  --color-cat-utilities: #f29900;
+  --color-cat-insurance: #1e8c45;
+  --color-cat-subscriptions: #ab47bc;
+  --color-cat-emi: #e94235;
+  --color-cat-food: #fb8c00;
+  --color-cat-transport: #26a69a;
+  --color-cat-shopping: #ec407a;
+  --color-cat-health: #66bb6a;
+  --color-cat-other: #9aa0a6;
+
+  /* ---------- Typography ---------- */
+  --font-display: "DM Sans", system-ui, -apple-system, sans-serif;
+  --font-body: "Inter", system-ui, -apple-system, sans-serif;
+
+  --text-score: 3.5rem;
+  --text-h1: 1.75rem;
+  --text-h2: 1.25rem;
+  --text-h3: 1rem;
+  --text-body: 0.875rem;
+  --text-caption: 0.75rem;
+  --text-micro: 0.625rem;
+
+  --font-weight-regular: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+
+  --line-height-tight: 1.1;
+  --line-height-body: 1.45;
+  --line-height-relaxed: 1.6;
+
+  /* ---------- Spacing ---------- */
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  --space-xl: 32px;
+  --space-2xl: 48px;
+
+  /* ---------- Border radius ---------- */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+  --radius-pill: 999px;
+
+  /* ---------- Elevation ---------- */
+  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.08),
+    0 4px 12px rgba(0, 0, 0, 0.05);
+  --shadow-elevated: 0 4px 16px rgba(0, 0, 0, 0.12);
+
+  /* ---------- Motion ---------- */
+  --motion-fast: 150ms;
+  --motion-base: 220ms;
+  --motion-slow: 320ms;
+  --motion-ease: cubic-bezier(0.2, 0, 0, 1);
+  --motion-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* ---------- Layout ---------- */
+  --app-max-width: 480px;
+  --bottom-nav-height: 64px;
+  --hit-target-min: 44px;
+
+  /* ---------- Semantic aliases (light mode defaults) ---------- */
+  --surface-base: var(--color-bg);
+  --surface-raised: var(--color-surface);
+  --surface-sunken: var(--color-surface-variant);
+  --text-strong: var(--color-text-primary);
+  --text-muted: var(--color-text-secondary);
+  --text-faint: var(--color-text-disabled);
+  --divider: var(--color-divider);
+}
+
+/* ============================================================
+ * Dark mode overrides
+ * Applied when <html data-theme="dark"> OR the system prefers dark
+ * AND the user hasn't chosen 'light'.
+ * ============================================================ */
+
+:root[data-theme="dark"] {
+  --color-bg: #121212;
+  --color-surface: #1e1e1e;
+  --color-surface-variant: #2a2a2a;
+  --color-text-primary: #e8eaed;
+  --color-text-secondary: #9aa0a6;
+  --color-text-disabled: #5f6368;
+  --color-divider: #2f2f2f;
+
+  --surface-base: var(--color-bg);
+  --surface-raised: var(--color-surface);
+  --surface-sunken: var(--color-surface-variant);
+  --text-strong: var(--color-text-primary);
+  --text-muted: var(--color-text-secondary);
+  --text-faint: var(--color-text-disabled);
+  --divider: var(--color-divider);
+
+  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.4),
+    0 4px 12px rgba(0, 0, 0, 0.3);
+  --shadow-elevated: 0 4px 16px rgba(0, 0, 0, 0.5);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --color-bg: #121212;
+    --color-surface: #1e1e1e;
+    --color-surface-variant: #2a2a2a;
+    --color-text-primary: #e8eaed;
+    --color-text-secondary: #9aa0a6;
+    --color-text-disabled: #5f6368;
+    --color-divider: #2f2f2f;
+
+    --surface-base: var(--color-bg);
+    --surface-raised: var(--color-surface);
+    --surface-sunken: var(--color-surface-variant);
+    --text-strong: var(--color-text-primary);
+    --text-muted: var(--color-text-secondary);
+    --text-faint: var(--color-text-disabled);
+    --divider: var(--color-divider);
+
+    --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.4),
+      0 4px 12px rgba(0, 0, 0, 0.3);
+    --shadow-elevated: 0 4px 16px rgba(0, 0, 0, 0.5);
+  }
+}
+
+/* ============================================================
+ * Reduced motion — honour OS setting globally.
+ * Utilities using these tokens automatically quiet down.
+ * ============================================================ */
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-fast: 0ms;
+    --motion-base: 0ms;
+    --motion-slow: 0ms;
+  }
+}
