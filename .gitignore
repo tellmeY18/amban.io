@@ -15,6 +15,18 @@ out/
 # Vite
 .vite/
 
+# Nix
+result
+result-*
+.direnv/
+.envrc.local
+
+# Release staging (produced by .github/workflows/release.yml locally)
+artifacts/
+amban-*.apk
+amban-*.apk.sha256
+amban-*.aab
+
 # Environment & secrets
 .env
 .env.*
@@ -103,6 +115,7 @@ android/app/src/main/assets/capacitor.config.json
 android/app/src/main/assets/capacitor.plugins.json
 android/capacitor-cordova-android-plugins/
 *.apk
+*.apk.sha256
 *.aab
 *.keystore
 *.jks
