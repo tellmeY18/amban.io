@@ -69,10 +69,7 @@ export interface ResetResult {
    * Per-step error messages. Keys match the boolean fields above.
    * Populated only for steps that threw; successful steps are absent.
    */
-  errors: Partial<Record<
-    "notifications" | "database" | "preferences" | "stores",
-    string
-  >>;
+  errors: Partial<Record<"notifications" | "database" | "preferences" | "stores", string>>;
 }
 
 /* ------------------------------------------------------------------
@@ -161,8 +158,7 @@ export async function resetApp(): Promise<ResetResult> {
     result.notificationsCancelled = true;
   } catch (error) {
     result.ok = false;
-    result.errors.notifications =
-      error instanceof Error ? error.message : String(error);
+    result.errors.notifications = error instanceof Error ? error.message : String(error);
   }
 
   // Step 2 — SQLite. Closes the connection, deletes the file, resets
@@ -183,8 +179,7 @@ export async function resetApp(): Promise<ResetResult> {
     result.preferencesCleared = true;
   } catch (error) {
     result.ok = false;
-    result.errors.preferences =
-      error instanceof Error ? error.message : String(error);
+    result.errors.preferences = error instanceof Error ? error.message : String(error);
   }
 
   // Step 4 — Zustand. Synchronous, can't really fail, but we wrap

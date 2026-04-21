@@ -133,14 +133,13 @@ export const CATEGORIES: ReadonlyArray<CategoryDefinition> = [
  * Lookup map for O(1) access when resolving a stored category key.
  * Lazily built from CATEGORIES so the list remains the single source.
  */
-export const CATEGORY_BY_KEY: Readonly<Record<CategoryKey, CategoryDefinition>> =
-  CATEGORIES.reduce(
-    (acc, category) => {
-      acc[category.key] = category;
-      return acc;
-    },
-    {} as Record<CategoryKey, CategoryDefinition>,
-  );
+export const CATEGORY_BY_KEY: Readonly<Record<CategoryKey, CategoryDefinition>> = CATEGORIES.reduce(
+  (acc, category) => {
+    acc[category.key] = category;
+    return acc;
+  },
+  {} as Record<CategoryKey, CategoryDefinition>,
+);
 
 /**
  * Type guard: true when the given string is a valid CategoryKey.

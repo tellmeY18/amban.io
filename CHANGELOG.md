@@ -8,6 +8,76 @@ release will be `v0.1.0` (see `ROADMAP.md`).
 
 ---
 
+## [0.1.0] — 2026-04-22
+
+First tagged alpha release. An unsigned debug APK for this version is
+published as a GitHub Release asset; no Play Store listing yet (Phase 17
+is intentionally out of scope for the alpha).
+
+### Added — product
+
+- **Phases 3–13 complete end-to-end** (see `ROADMAP.md` for the granular
+  breakdown): local SQLite persistence layer with migration runner and
+  repositories; Zustand store scaffolding with write-through mutators and
+  parallel hydration; pure-function scoring engine (`utils/scoring.ts`)
+  plus date helpers honouring the §13 edge cases; onboarding-vs-authenticated
+  router split with `amban://` deep links and lifecycle subscribers; the
+  six-step onboarding flow; Home screen with `ScoreCard`, warning banner,
+  income-day banner, upcoming-payments strip, and insight carousel;
+  Daily Log screen with backfill sheet and Log History with Recharts bar
+  chart; Balance & Finance Management (`ManageIncome`, `ManageRecurring`,
+  append-only balance snapshots, "mark as paid" affordance); the full
+  nine-generator Insights engine; Local Notifications scheduler honouring
+  Appendix E ID ranges with deterministic daily-prompt rotation and
+  fingerprint-based dedupe.
+- **Settings → About** now reads real build metadata (version, commit
+  SHA, build date) injected at build time by Vite's `define` config.
+- **On-device privacy statement** (`/settings/privacy`) — a static page
+  that reiterates the no-network, no-cloud, no-tracking promise and
+  points to the reset flow for on-device data wipe.
+- **Export data** — `utils/exportData.ts` produces a single versioned
+  JSON document containing every SQLite table row plus every amban-scoped
+  Capacitor Preferences key. Offered to the user via the Web Share API
+  where available and falls back to an anchor-download. Read-only; a
+  future import path will ship separately.
+
+### Added — infrastructure
+
+- **`flake.nix`** — reproducible Nix dev shell providing Temurin JDK 21,
+  the Android SDK (platforms 34/35/36, build-tools 34/35/36, cmdline-tools,
+  platform-tools), Gradle, Node 22, Python, and Git. Exports
+  `JAVA_HOME` / `ANDROID_HOME` / `PATH` on shell entry. Used by both
+  local builds and the release workflow so CI and developer machines
+  build byte-identically.
+- **`.github/workflows/release.yml`** — release pipeline that triggers
+  on tags matching `v*` (and on `workflow_dispatch` for dry runs).
+  Installs Nix, runs the full quality gate (typecheck + lint + build +
+  bundle privacy grep), syncs Capacitor, assembles the debug APK via
+  Gradle, stages it with a versioned filename + SHA-256 sidecar, and
+  uploads it as both a workflow artifact and a GitHub Release asset
+  (prerelease-flagged for alpha).
+- **Android manifest hardening** — added `POST_NOTIFICATIONS`,
+  `SCHEDULE_EXACT_ALARM`, `USE_EXACT_ALARM`, `VIBRATE`, and
+  `RECEIVE_BOOT_COMPLETED` permissions; locked the launcher activity
+  to `android:screenOrientation="portrait"` per Appendix H; registered
+  the `amban://` deep-link intent filter so notification taps route
+  into `/log`.
+- **Version alignment** — `package.json` bumped to `0.1.0`;
+  `android/app/build.gradle` `versionName` set to `0.1.0`.
+- **Node baseline** — `.nvmrc` and the Nix shell bumped to Node 22 to
+  satisfy the Capacitor 8 CLI requirement.
+
+### Changed
+
+- `Settings → About` no longer hard-codes a fake `amban · 1.0.0` string;
+  it now pulls from `constants/buildInfo.ts`, which reads values
+  injected at build time (`__APP_VERSION__`, `__APP_COMMIT__`,
+  `__APP_BUILD_DATE__`) via `vite.config.ts`. Falls back to
+  `0.0.0-dev` / `local` if Git or the env vars aren't available so
+  local dev builds never crash on undefined metadata.
+
+---
+
 ## [Unreleased]
 
 ### Added

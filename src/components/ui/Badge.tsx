@@ -16,10 +16,10 @@ export interface BadgeProps {
 
 const TONE_STYLES: Record<BadgeTone, CSSProperties> = {
   neutral: { backgroundColor: "var(--surface-sunken)", color: "var(--text-muted)" },
-  info:    { backgroundColor: "var(--color-primary-light)", color: "var(--color-primary-dark)" },
+  info: { backgroundColor: "var(--color-primary-light)", color: "var(--color-primary-dark)" },
   success: { backgroundColor: "rgba(30,140,69,0.12)", color: "var(--color-score-excellent)" },
   warning: { backgroundColor: "rgba(242,153,0,0.14)", color: "var(--color-score-good)" },
-  danger:  { backgroundColor: "rgba(233,66,53,0.12)", color: "var(--color-score-warning)" },
+  danger: { backgroundColor: "rgba(233,66,53,0.12)", color: "var(--color-score-warning)" },
 };
 
 const Badge: React.FC<BadgeProps> = ({ tone = "neutral", className, children }) => (

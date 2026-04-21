@@ -180,8 +180,7 @@ const StyleGuideScreen: React.FC = () => {
               }}
             >
               Phase 2 primitives, token surfaces, and theme behaviour. This route is removed before
-              release. Reduce motion is currently{" "}
-              <strong>{reduceMotion ? "on" : "off"}</strong>.
+              release. Reduce motion is currently <strong>{reduceMotion ? "on" : "off"}</strong>.
             </p>
           </header>
 
@@ -257,7 +256,14 @@ const StyleGuideScreen: React.FC = () => {
           {/* -------------------------------------------------- */}
           <Section title="Typography" caption="Display: DM Sans · Body: Inter (self-hosted).">
             <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-sm)" }}>
-              <span style={{ fontFamily: "var(--font-display)", fontSize: "var(--text-score)", fontWeight: "var(--font-weight-bold)", lineHeight: "var(--line-height-tight)" }}>
+              <span
+                style={{
+                  fontFamily: "var(--font-display)",
+                  fontSize: "var(--text-score)",
+                  fontWeight: "var(--font-weight-bold)",
+                  lineHeight: "var(--line-height-tight)",
+                }}
+              >
                 ₹ 2,340
               </span>
               <h1 style={{ fontSize: "var(--text-h1)" }}>H1 · Know your number.</h1>
@@ -276,8 +282,13 @@ const StyleGuideScreen: React.FC = () => {
           {/* -------------------------------------------------- */}
           {/* Cards                                              */}
           {/* -------------------------------------------------- */}
-          <Section title="Card" caption="Base surface primitive. `flat` vs `elevated`, tappable or static.">
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "var(--space-md)" }}>
+          <Section
+            title="Card"
+            caption="Base surface primitive. `flat` vs `elevated`, tappable or static."
+          >
+            <div
+              style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "var(--space-md)" }}
+            >
               <Card variant="flat">
                 <strong>Flat card</strong>
                 <p style={{ color: "var(--text-muted)", fontSize: "var(--text-caption)" }}>
@@ -327,9 +338,24 @@ const StyleGuideScreen: React.FC = () => {
           {/* -------------------------------------------------- */}
           {/* ProgressRing                                       */}
           {/* -------------------------------------------------- */}
-          <Section title="ProgressRing" caption="SVG ring; snaps instead of tweening when reduce-motion is on.">
-            <div style={{ display: "flex", alignItems: "center", gap: "var(--space-lg)", flexWrap: "wrap" }}>
-              <ProgressRing progress={progress} aria-label="Demo progress" size={96} strokeWidth={8}>
+          <Section
+            title="ProgressRing"
+            caption="SVG ring; snaps instead of tweening when reduce-motion is on."
+          >
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "var(--space-lg)",
+                flexWrap: "wrap",
+              }}
+            >
+              <ProgressRing
+                progress={progress}
+                aria-label="Demo progress"
+                size={96}
+                strokeWidth={8}
+              >
                 <span
                   style={{
                     fontFamily: "var(--font-display)",
@@ -400,12 +426,7 @@ const StyleGuideScreen: React.FC = () => {
               onChange={() => undefined}
               error="Amount must be greater than zero."
             />
-            <CurrencyInput
-              label="Disabled"
-              value={65000}
-              onChange={() => undefined}
-              disabled
-            />
+            <CurrencyInput label="Disabled" value={65000} onChange={() => undefined} disabled />
             <small>
               Parsed value: <code>{amount ?? "null"}</code>
             </small>
@@ -466,7 +487,10 @@ const StyleGuideScreen: React.FC = () => {
           {/* -------------------------------------------------- */}
           {/* Haptics                                            */}
           {/* -------------------------------------------------- */}
-          <Section title="Haptics" caption="All fire via utils/haptics.ts. No-op under reduce-motion or on web.">
+          <Section
+            title="Haptics"
+            caption="All fire via utils/haptics.ts. No-op under reduce-motion or on web."
+          >
             <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-sm)" }}>
               {(
                 [
@@ -539,8 +563,7 @@ const StyleGuideScreen: React.FC = () => {
             caption="The real tab bar. Tapping emits a selection haptic and reports the id (no navigation)."
           >
             <p style={{ fontSize: "var(--text-caption)", color: "var(--text-muted)", margin: 0 }}>
-              Last tapped:{" "}
-              <code>{lastTab ?? "—"}</code>
+              Last tapped: <code>{lastTab ?? "—"}</code>
             </p>
             <div
               style={{

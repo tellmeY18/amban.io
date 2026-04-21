@@ -1,0 +1,260 @@
+# ============================================================
+# amban.io — Release pipeline
+#
+# Produces a downloadable Android APK for tagged releases and
+# uploads it as a GitHub Release asset. Since amban is still in
+# alpha and there is no Play Store submission yet (ROADMAP.md
+# Phase 17 is explicitly out-of-scope for v0.1.0), this workflow
+# ships an unsigned debug APK suitable for side-loading onto a
+# real device.
+#
+# Triggers:
+#   - push of a tag matching `v*` (e.g. `v0.1.0`)
+#   - manual `workflow_dispatch` with a version input (for dry
+#     runs and pre-release rebuilds without re-tagging)
+#
+# What this pipeline does NOT do (by design):
+#   - No Play Store upload.
+#   - No release signing / no keystore plumbing. Debug-signed only.
+#   - No iOS build (needs macOS + signing; tracked separately).
+#   - No auto-bump of package.json / build.gradle versions.
+#
+# Reproducibility: JDK, Node, Gradle, and the Android SDK all come
+# from `flake.nix` so CI, local, and future release boxes build
+# byte-identically (modulo debug-signing randomness).
+# ============================================================
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version string for dry-run builds (e.g. v0.1.0)"
+        required: true
+        default: "v0.1.0"
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write # required to create the GitHub Release + upload assets
+
+jobs:
+  android-apk:
+    name: Build Android debug APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history so `git rev-parse --short HEAD` works in Vite
+
+      # ----------------------------------------------------------
+      # Resolve the version string once so every downstream step
+      # agrees on it. Tag pushes use the tag (e.g. `v0.1.0`);
+      # manual dispatches use the input.
+      # ----------------------------------------------------------
+      - name: Resolve version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            RAW="${{ inputs.version }}"
+          else
+            RAW="${GITHUB_REF#refs/tags/}"
+          fi
+          # Strip any leading "v" to get the bare semver.
+          BARE="${RAW#v}"
+          SHORT_SHA="$(git rev-parse --short HEAD)"
+          echo "raw=$RAW" >> "$GITHUB_OUTPUT"
+          echo "bare=$BARE" >> "$GITHUB_OUTPUT"
+          echo "short_sha=$SHORT_SHA" >> "$GITHUB_OUTPUT"
+          echo "Version: $RAW (bare $BARE, commit $SHORT_SHA)"
+
+      # ----------------------------------------------------------
+      # Nix does all the heavy lifting: JDK 21, Android SDK,
+      # Gradle, Node, the lot — pinned by flake.lock.
+      # ----------------------------------------------------------
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v11
+        with:
+          extra-conf: |
+            experimental-features = nix-command flakes
+            accept-flake-config = true
+
+      - name: Cache Nix store
+        uses: DeterminateSystems/magic-nix-cache-action@v7
+
+      # ----------------------------------------------------------
+      # Warm Gradle/npm caches across runs. Gradle caches are keyed
+      # on the build files so any dep bump invalidates cleanly.
+      # ----------------------------------------------------------
+      - name: Cache npm
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-npm-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-npm-
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('android/**/*.gradle*', 'android/**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      # ----------------------------------------------------------
+      # Build the web bundle first. `GIT_COMMIT` is consumed by
+      # vite.config.ts so the About panel shows the CI SHA, not
+      # whatever happened to be checked out locally.
+      # ----------------------------------------------------------
+      - name: Install web dependencies
+        run: nix develop --command npm ci
+        env:
+          GIT_COMMIT: ${{ steps.version.outputs.short_sha }}
+
+      - name: Typecheck
+        run: nix develop --command npm run typecheck
+
+      - name: Lint
+        run: nix develop --command npm run lint
+
+      - name: Build web bundle
+        run: nix develop --command npm run build
+        env:
+          GIT_COMMIT: ${{ steps.version.outputs.short_sha }}
+
+      # ----------------------------------------------------------
+      # Privacy gate — same check as CI. A release build must never
+      # regress on this, so we repeat the grep rather than trusting
+      # that CI already ran on this ref.
+      # ----------------------------------------------------------
+      - name: Privacy gate — no network symbols in bundle
+        run: |
+          set -euo pipefail
+          FORBIDDEN_PATTERNS=(
+            "sentry.io"
+            "mixpanel.com"
+            "amplitude.com"
+            "posthog.com"
+            "firebaseio.com"
+            "googleanalytics"
+            "google-analytics"
+            "segment.io"
+          )
+          FOUND=0
+          for pattern in "${FORBIDDEN_PATTERNS[@]}"; do
+            if grep -r --include='*.js' --include='*.css' --include='*.html' -l -- "$pattern" dist >/dev/null 2>&1; then
+              echo "::error::Forbidden network reference '$pattern' found in dist/."
+              FOUND=1
+            fi
+          done
+          [ "$FOUND" -eq 0 ] || exit 1
+          echo "Privacy gate passed."
+
+      # ----------------------------------------------------------
+      # Sync the web bundle into the Android project and build.
+      # `assembleDebug` produces `app-debug.apk`, which is signed
+      # with the Android debug keystore and installable on any
+      # device with "Install unknown apps" allowed.
+      # ----------------------------------------------------------
+      - name: Capacitor sync (android)
+        run: nix develop --command npx cap sync android
+
+      - name: Assemble debug APK
+        run: nix develop --command bash -c "cd android && ./gradlew --no-daemon assembleDebug"
+
+      # ----------------------------------------------------------
+      # Stage the artifact with a versioned filename so the GitHub
+      # release asset is self-describing after download.
+      # ----------------------------------------------------------
+      - name: Stage APK
+        id: stage
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          SRC="android/app/build/outputs/apk/debug/app-debug.apk"
+          if [ ! -f "$SRC" ]; then
+            echo "::error::APK not found at $SRC"
+            exit 1
+          fi
+          OUT="artifacts/amban-${{ steps.version.outputs.raw }}-android-debug.apk"
+          cp "$SRC" "$OUT"
+          sha256sum "$OUT" > "$OUT.sha256"
+          ls -lh artifacts/
+          echo "apk=$OUT" >> "$GITHUB_OUTPUT"
+          echo "sha=$OUT.sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Upload APK as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: amban-${{ steps.version.outputs.raw }}-android-debug
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 30
+
+      # ----------------------------------------------------------
+      # Only publish a GitHub Release on a tag push. Manual runs
+      # stop at the workflow-artifact stage — useful for dry runs.
+      # ----------------------------------------------------------
+      - name: Publish GitHub Release
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.raw }}
+          name: amban ${{ steps.version.outputs.raw }} (alpha)
+          draft: false
+          prerelease: true
+          generate_release_notes: true
+          files: |
+            ${{ steps.stage.outputs.apk }}
+            ${{ steps.stage.outputs.sha }}
+          body: |
+            ## amban ${{ steps.version.outputs.raw }} — alpha preview
+
+            > Know your number. Own your day.
+
+            This is an **alpha** build for on-device testing. It is an unsigned
+            debug APK intended for side-loading onto Android phones. No Play
+            Store listing exists yet (tracked as ROADMAP.md Phase 17).
+
+            ### Install
+
+            1. Download `amban-${{ steps.version.outputs.raw }}-android-debug.apk`.
+            2. On your Android phone, allow "Install unknown apps" for your
+               browser or file manager.
+            3. Tap the APK to install.
+
+            ### Verify
+
+            ```
+            sha256sum -c amban-${{ steps.version.outputs.raw }}-android-debug.apk.sha256
+            ```
+
+            ### What you get
+
+            - 100% local. No accounts, no sync, no network requests.
+            - Onboarding → Home → Daily Log → Insights → Settings, all wired.
+            - Local notifications for the daily prompt, upcoming bills, and salary day.
+            - Light + dark themes, haptics, reduce-motion aware.
+
+            ### Known caveats for alpha
+
+            - Debug-signed APK (not Play-signed). Expect a scary-looking
+              "unknown developer" prompt on install.
+            - iOS build is not included in this release.
+            - No data export yet — "Reset app" is the only data-wipe path.
+
+            ---
+
+            Built from commit `${{ steps.version.outputs.short_sha }}`.

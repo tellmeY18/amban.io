@@ -72,10 +72,7 @@ const Card: React.FC<CardProps> = ({
     color: "var(--text-strong)",
     borderRadius: "var(--radius-lg)",
     padding: PADDING_TOKEN[padding],
-    boxShadow:
-      variant === "elevated"
-        ? "var(--shadow-elevated)"
-        : "var(--shadow-card)",
+    boxShadow: variant === "elevated" ? "var(--shadow-elevated)" : "var(--shadow-card)",
     transition:
       "transform var(--motion-fast) var(--motion-ease), box-shadow var(--motion-fast) var(--motion-ease)",
     ...(interactive

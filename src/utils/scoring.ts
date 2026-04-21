@@ -112,13 +112,7 @@ export interface ScoreResult {
  * Not implemented yet — returns a safe zero-state. Landing in Phase 5.
  */
 export function calculateAmbanScore(input: ScoreInput): ScoreResult {
-  const {
-    currentBalance,
-    spendSinceLastSnapshot,
-    incomeSources,
-    recurringPayments,
-    today,
-  } = input;
+  const { currentBalance, spendSinceLastSnapshot, incomeSources, recurringPayments, today } = input;
 
   // 1. Find the next income date across all sources.
   const nextIncomeDate = getNextIncomeDate(incomeSources, today);

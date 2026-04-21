@@ -388,9 +388,7 @@ export const incomeSourcesRepo = {
    */
   async countActive(): Promise<number> {
     return withDb(async (db) => {
-      const res = await db.query(
-        "SELECT COUNT(*) AS c FROM income_sources WHERE is_active = 1;",
-      );
+      const res = await db.query("SELECT COUNT(*) AS c FROM income_sources WHERE is_active = 1;");
       const row = rows<{ c: number }>(res)[0];
       return row?.c ?? 0;
     });
@@ -548,10 +546,7 @@ export const recurringPaymentsRepo = {
     });
   },
 
-  async update(
-    id: number,
-    patch: Partial<Omit<RecurringPaymentRecord, "id">>,
-  ): Promise<void> {
+  async update(id: number, patch: Partial<Omit<RecurringPaymentRecord, "id">>): Promise<void> {
     const sets: string[] = [];
     const values: unknown[] = [];
 

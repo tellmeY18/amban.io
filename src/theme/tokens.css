@@ -78,8 +78,7 @@
   --radius-pill: 999px;
 
   /* ---------- Elevation ---------- */
-  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.08),
-    0 4px 12px rgba(0, 0, 0, 0.05);
+  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.08), 0 4px 12px rgba(0, 0, 0, 0.05);
   --shadow-elevated: 0 4px 16px rgba(0, 0, 0, 0.12);
 
   /* ---------- Motion ---------- */
@@ -127,8 +126,7 @@
   --text-faint: var(--color-text-disabled);
   --divider: var(--color-divider);
 
-  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.4),
-    0 4px 12px rgba(0, 0, 0, 0.3);
+  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.4), 0 4px 12px rgba(0, 0, 0, 0.3);
   --shadow-elevated: 0 4px 16px rgba(0, 0, 0, 0.5);
 }
 
@@ -150,8 +148,7 @@
     --text-faint: var(--color-text-disabled);
     --divider: var(--color-divider);
 
-    --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.4),
-      0 4px 12px rgba(0, 0, 0, 0.3);
+    --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.4), 0 4px 12px rgba(0, 0, 0, 0.3);
     --shadow-elevated: 0 4px 16px rgba(0, 0, 0, 0.5);
   }
 }

@@ -159,7 +159,9 @@ export function formatTime12h(time24: string): string {
  * Time-of-day greeting for the Home screen header.
  * Thresholds are deliberately simple and Indian-English toned.
  */
-export function greetingForHour(hour: number): "Good morning" | "Good afternoon" | "Good evening" | "Good night" {
+export function greetingForHour(
+  hour: number,
+): "Good morning" | "Good afternoon" | "Good evening" | "Good night" {
   if (hour < 5) return "Good night";
   if (hour < 12) return "Good morning";
   if (hour < 17) return "Good afternoon";

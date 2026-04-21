@@ -22,11 +22,7 @@
  */
 
 import { Capacitor } from "@capacitor/core";
-import {
-  Haptics,
-  ImpactStyle,
-  NotificationType,
-} from "@capacitor/haptics";
+import { Haptics, ImpactStyle, NotificationType } from "@capacitor/haptics";
 
 /**
  * Reads the OS-level reduce-motion preference. Returns false on
@@ -100,23 +96,17 @@ export const haptics = {
 
   /** Success notification — daily spend saved under the score. */
   success(): Promise<void> {
-    return safeCall(() =>
-      Haptics.notification({ type: NotificationType.Success }),
-    );
+    return safeCall(() => Haptics.notification({ type: NotificationType.Success }));
   },
 
   /** Warning notification — daily spend saved over the score. */
   warning(): Promise<void> {
-    return safeCall(() =>
-      Haptics.notification({ type: NotificationType.Warning }),
-    );
+    return safeCall(() => Haptics.notification({ type: NotificationType.Warning }));
   },
 
   /** Error notification — reset app confirmed, destructive action fired. */
   error(): Promise<void> {
-    return safeCall(() =>
-      Haptics.notification({ type: NotificationType.Error }),
-    );
+    return safeCall(() => Haptics.notification({ type: NotificationType.Error }));
   },
 
   /**
