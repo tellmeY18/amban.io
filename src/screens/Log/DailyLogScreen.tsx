@@ -1020,7 +1020,12 @@ const ConfirmDaySheet: React.FC<ConfirmDaySheetProps> = ({
   };
 
   return (
-    <BottomSheet open={open} onDismiss={onDismiss} title="Confirm today's total" initialBreakpoint={0.75}>
+    <BottomSheet
+      open={open}
+      onDismiss={onDismiss}
+      title="Confirm today's total"
+      initialBreakpoint={0.75}
+    >
       <p
         style={{
           margin: 0,
@@ -1206,7 +1211,12 @@ const BackfillSheet: React.FC<BackfillSheetProps> = ({
   }, [date, existingLogDates]);
 
   return (
-    <BottomSheet open={open} onDismiss={onDismiss} title="Backfill missed days" initialBreakpoint={0.75}>
+    <BottomSheet
+      open={open}
+      onDismiss={onDismiss}
+      title="Backfill missed days"
+      initialBreakpoint={0.75}
+    >
       <p
         style={{
           fontSize: "var(--text-body)",
