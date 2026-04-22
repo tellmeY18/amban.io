@@ -16,7 +16,40 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    // ------------------------------------------------------------
+    // Project-owned debug keystore.
+    //
+    // By default Android Gradle Plugin signs debug builds with the
+    // auto-generated `~/.android/debug.keystore`, which differs
+    // between machines (your laptop, every CI runner, every new
+    // clone). Two APKs with the same applicationId but different
+    // signing certificates are refused by Android with
+    // "App not installed — package conflicts with existing
+    // package" on upgrade.
+    //
+    // Committing a project-owned debug keystore makes every build
+    // — local, CI, or anyone else's clone — sign with the same
+    // certificate, so debug APKs cleanly upgrade in place across
+    // environments. This is safe to commit: debug keystores are
+    // never accepted by the Play Store, and Google's own default
+    // debug key is a well-known public secret. Release signing
+    // is tracked separately in ROADMAP.md Phase 15/16.
+    //
+    // The keystore lives at `android/app/debug.keystore` and
+    // matches the credentials below.
+    // ------------------------------------------------------------
+    signingConfigs {
+        debug {
+            storeFile file('debug.keystore')
+            storePassword 'amban-debug'
+            keyAlias 'amban-debug'
+            keyPassword 'amban-debug'
+        }
+    }
     buildTypes {
+        debug {
+            signingConfig signingConfigs.debug
+        }
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'

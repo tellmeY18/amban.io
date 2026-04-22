@@ -32,7 +32,12 @@ amban-*.aab
 .env.*
 !.env.example
 .env.release
+# Release-signing keystores must never be committed. The
+# project-owned *debug* keystore at `android/app/debug.keystore` is
+# an intentional exception — see the comment in
+# `android/app/build.gradle` for why it is safe to commit.
 *.keystore
+!android/app/debug.keystore
 *.jks
 *.p8
 *.p12
@@ -118,6 +123,7 @@ android/capacitor-cordova-android-plugins/
 *.apk.sha256
 *.aab
 *.keystore
+!android/app/debug.keystore
 *.jks
 
 # Gradle
