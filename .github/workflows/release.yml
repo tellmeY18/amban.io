@@ -35,7 +35,7 @@ on:
       version:
         description: "Version string for dry-run builds (e.g. v0.1.0)"
         required: true
-        default: "v0.1.0"
+        default: "v0.1.1"
 
 concurrency:
   group: release-${{ github.ref }}
@@ -76,6 +76,40 @@ jobs:
           echo "bare=$BARE" >> "$GITHUB_OUTPUT"
           echo "short_sha=$SHORT_SHA" >> "$GITHUB_OUTPUT"
           echo "Version: $RAW (bare $BARE, commit $SHORT_SHA)"
+
+      # ----------------------------------------------------------
+      # Sync every version-bearing file in the tree against the tag.
+      #
+      # `scripts/bump-version.sh` is idempotent: it FORCES every
+      # location (package.json, package-lock.json,
+      # android/app/build.gradle versionName+versionCode, doc-comment
+      # examples, and this workflow's own dispatch default) to match
+      # the target. If the tree already matched (a human ran the
+      # script locally before tagging), this is a no-op. If the tree
+      # lagged (the human only tagged), this rewrites the files so
+      # the built APK carries the correct versionName, About-row
+      # shows the correct version, and the bundle's injected
+      # `__APP_VERSION__` reflects the tag.
+      #
+      # We do NOT commit the result back to `main`. The rewritten
+      # files exist only inside this CI workspace for the duration
+      # of the build. To persist them, run the script locally before
+      # tagging (recommended) or open a follow-up PR by hand.
+      # The build provenance still points at the tagged commit.
+      # ----------------------------------------------------------
+      - name: Sync repo version to tag
+        run: |
+          chmod +x scripts/bump-version.sh
+          ./scripts/bump-version.sh "${{ steps.version.outputs.bare }}"
+          # Emit a diff summary for the job log so a skimmer can see
+          # whether CI had to rewrite anything or the tree was already
+          # in sync at tag time.
+          if git diff --quiet; then
+            echo "Tree already in sync with tag — no files rewritten."
+          else
+            echo "Files rewritten to match tag ${{ steps.version.outputs.raw }}:"
+            git diff --stat
+          fi
 
       # ----------------------------------------------------------
       # Nix does all the heavy lifting: JDK 21, Android SDK,

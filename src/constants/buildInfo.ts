@@ -18,8 +18,8 @@ const safe = (value: unknown, fallback: string): string =>
   typeof value === "string" && value.length > 0 ? value : fallback;
 
 export const BUILD_INFO = {
-  /** Semver string from package.json (e.g. "0.1.0"). */
-  version: safe(typeof __APP_VERSION__ !== "undefined" ? __APP_VERSION__ : undefined, "0.0.0-dev"),
+  /** Semver string from package.json (e.g. "0.1.1"). */
+  version: safe(typeof __APP_VERSION__ !== "undefined" ? __APP_VERSION__ : undefined, "0.1.1-dev"),
 
   /** Short git SHA of the commit that produced the bundle. */
   commit: safe(typeof __APP_COMMIT__ !== "undefined" ? __APP_COMMIT__ : undefined, "local"),
@@ -34,7 +34,7 @@ export const BUILD_INFO = {
   appName: "amban",
 } as const;
 
-/** Compact "amban · 0.1.0 (abc1234)" string for the About row. */
+/** Compact "amban · 0.1.1 (abc1234)" string for the About row. */
 export const formatBuildLabel = (): string => {
   const { appName, version, commit } = BUILD_INFO;
   return commit === "local"

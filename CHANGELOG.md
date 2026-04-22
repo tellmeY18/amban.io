@@ -3,8 +3,9 @@
 All notable changes to amban.io are recorded in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
-Versions are not assigned while the project is pre-release; the first tagged
-release will be `v0.1.0` (see `ROADMAP.md`).
+Releases are tagged as `vX.Y.Z` and published through the GitHub Actions
+release workflow (see `ROADMAP.md`). `v0.1.0` was the first tagged alpha;
+`v0.1.1` is the current alpha.
 
 ---
 
@@ -75,6 +76,109 @@ is intentionally out of scope for the alpha).
   `__APP_BUILD_DATE__`) via `vite.config.ts`. Falls back to
   `0.0.0-dev` / `local` if Git or the env vars aren't available so
   local dev builds never crash on undefined metadata.
+
+---
+
+## [0.1.1] — 2026-04-22
+
+Second alpha release. Primary theme: the daily log finally matches how
+people actually spend. Secondary theme: a full accessibility audit with
+grouped tracking issues. Same side-load distribution as v0.1.0 — no
+Play Store yet (Phase 17 remains out of scope for the alpha track).
+
+### Added
+
+- **Two-tier logging model** — migration `002_spend_entries.sql`
+  introduces a `spend_entries` table (N rows per day, each with its own
+  amount / category / note / timestamp) plus a `confirmed_at` column on
+  `daily_logs`. Entries auto-roll into `daily_logs.spent` via
+  `spendEntriesRepo.rollUp()` on every mutation so scoring never lags
+  behind the entries list. Pure-additive — no v0.1.0 row is rewritten.
+- **`spendEntriesRepo`** in `src/db/repositories.ts` — typed CRUD plus
+  `rollUp` (writes the day's sum back to `daily_logs`), `sumForDate`,
+  `listForDate` / `listBetween`, and `count` for the insights engine.
+- **`dailyLogsRepo.setConfirmed`** and the `confirmed?: boolean` flag
+  on `DailyLogInput` — so the end-of-day sheet can stamp
+  `confirmed_at` explicitly without accidentally sealing the day
+  during routine entry rollups.
+- **Daily Log screen — full rewrite** (`src/screens/Log/DailyLogScreen.tsx`).
+  Entry-first UX: running-total hero banner → "Add spend entry"
+  primary CTA → per-entry list (category avatar, amount, label,
+  time) → end-of-day "I'm done for today" confirmation sheet.
+  Each entry opens its own bottom sheet with amount (additive
+  quick-amount chips), category chips, notes, and edit/delete.
+  Post-confirmation the day shows an "Editable till midnight" badge
+  and users can still add/edit/delete entries until local 23:59.
+  Score-diff tone (under/on/over) is shown live above the entries
+  list and on the confirmation sheet. The backfill sheet (§13.6)
+  is preserved and still writes via `dailyStore.backfillLogs`.
+- **`dailyStore`** rewritten to carry `entries`, `entriesByDate`,
+  `todayEntries`, and `todayEntriesTotal` alongside the existing
+  `logs` / `todayLog`. New actions: `addEntry`, `updateEntry`,
+  `deleteEntry`, `confirmDay`, `unconfirmDay`. The legacy day-total
+  operations (`logSpend`, `updateLog`, `deleteLog`, `backfillLogs`)
+  are retained as the explicit escape hatch for history edits and
+  backfill flows that bypass the entries rollup.
+- **Log history — per-entry breakdown**. The expanded row now shows a
+  read-only "Entries (N)" list pulled from `entriesByDate[date]`
+  with category icons and amounts. Backfilled days (no entries,
+  just a `daily_logs` row) render a quiet italic
+  "No per-entry detail for this day." A green "Confirmed" tick
+  badge surfaces on days where `confirmed_at` is set.
+- **Accessibility audit & tracking** — new `ACCESS.md` (40 findings
+  against WCAG 2.1/2.2 AA + `CLAUDE.md` Appendix G + Android
+  guidance) and 10 grouped tracking issues filed on GitHub
+  (issues #1–#10) covering focus visibility, hit targets, motion /
+  zoom, non-text content, colour-only status, labels + landmarks,
+  live regions, form semantics, and contrast tokens. Issue #10 is
+  the cross-check tracker that maps every finding from the
+  two-tier logging rewrite and the privacy-statement page onto
+  issues #1–#9 so nothing from this release regresses silently.
+- **`DbDump.spendEntries`** — the dev inspector and the data-export
+  pipeline (`src/utils/exportData.ts`) now include a 90-day rolling
+  window of entries alongside the existing tables, with the export
+  format staying at `exportVersion: 1` (entries fold into the
+  generic schema-agnostic shape).
+
+### Changed
+
+- **License: AGPL-3.0-or-later → GPL-3.0-or-later** across
+  `package.json`, `package-lock.json`, `README.md`, `CHANGELOG.md`,
+  and the in-app privacy statement. The `LICENSE` file itself was
+  already verbatim GPLv3 — the audit confirmed it, the mention of
+  "Affero" in §13 is the canonical GPLv3 interop clause.
+- **Version bump** — `package.json` → `0.1.1`,
+  `android/app/build.gradle` → `versionName "0.1.1"`, `versionCode 2`.
+- `src/screens/Log/DailyLogScreen.tsx` formatting — Prettier-clean
+  after the rewrite (CI format gate caught it).
+
+### Fixed
+
+- **Single-category-per-day friction** — the biggest usability issue
+  from the v0.1.0 dogfood pass. A user can no longer be forced to
+  mentally roll ₹120 chai + ₹800 groceries + ₹60 auto into one
+  number before tapping save; they're three entries, three
+  categories, three notes, one confirmed total.
+- **`daily_logs.confirmed_at` semantics** — routine entry rollups
+  never seal the day. Confirmation is an explicit user action.
+  Re-confirm preserves the first-confirmation timestamp via
+  `COALESCE(daily_logs.confirmed_at, excluded.confirmed_at)` in
+  the upsert — so the audit trail of "when did the user first say
+  they were done" survives later edits.
+- **Prettier format** on `src/screens/Log/DailyLogScreen.tsx` — the
+  rewrite initially tripped the CI format gate. Resolved in the
+  same commit range.
+
+### Migration notes
+
+- A fresh install runs migrations 001 + 002 in a single transaction
+  — end state is identical to a device that upgraded from v0.1.0.
+- An upgrading device runs only 002. No existing rows are
+  rewritten. Backfilled days from v0.1.0 survive unchanged (they
+  simply show the "No per-entry detail for this day." hint when
+  expanded in History).
+- Per `CLAUDE.md` Appendix J, `001_init.sql` and `002_spend_entries.sql`
+  are immutable from here on. Any further change ships as `003_*.sql`.
 
 ---
 

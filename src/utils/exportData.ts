@@ -53,7 +53,7 @@ export interface AmbanExportPayload {
   /** SQLite schema version at the time of export (from migrations). */
   readonly schemaVersion: number;
 
-  /** App version string, e.g. "0.1.0". */
+  /** App version string, e.g. "0.1.1". */
   readonly appVersion: string;
 
   /** Short git SHA of the build that produced this export, if known. */
@@ -123,7 +123,7 @@ export function serializeExport(payload: AmbanExportPayload): string {
 /**
  * Generate a filename the user will recognise six months later.
  *
- * Shape: `amban-export-0.1.0-20260422T0250Z.json`
+ * Shape: `amban-export-0.1.1-20260422T0250Z.json`
  *   - app version so a user with multiple backups can see which build
  *     wrote the file without opening it.
  *   - compact UTC timestamp so the filename sorts chronologically in any
