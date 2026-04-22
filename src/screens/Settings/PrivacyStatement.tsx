@@ -214,7 +214,7 @@ const PrivacyStatement = () => {
 
           <Section title="Open source">
             <p style={{ margin: 0 }}>
-              amban is licensed under AGPL-3.0-or-later. The source code is the ultimate answer to
+              amban is licensed under GPL-3.0-or-later. The source code is the ultimate answer to
               "what does this app actually do?" — read it, audit it, fork it.
             </p>
           </Section>

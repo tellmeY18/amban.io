@@ -181,7 +181,7 @@ All four must pass before merging to `main`.
 
 ## License
 
-[GNU Affero General Public License v3.0](./LICENSE). If you run a modified version of amban.io as a network service, you must make the modified source available to your users. For a local-only app this is effectively permissive, but the copyleft terms apply to anyone who forks and redistributes.
+[GNU General Public License v3.0 or later](./LICENSE). Copyleft terms apply to anyone who forks and redistributes amban.io in source or binary form — modifications must be made available under the same license.
 
 ---
 

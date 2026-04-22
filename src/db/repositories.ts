@@ -611,11 +611,27 @@ export interface DailyLogRecord {
   id: number;
   /** ISO date, YYYY-MM-DD. */
   logDate: string;
+  /**
+   * Confirmed daily total. Kept in sync with the sum of
+   * `spend_entries` for the same date whenever an entry mutates
+   * (see spendEntriesRepo.rollUp). Users can still edit this value
+   * directly via the end-of-day confirmation sheet or the history
+   * edit flow — the entries rollup only writes it when the two
+   * diverge and the day is not yet sealed in the UI layer.
+   */
   spent: number;
   notes: string | null;
   category: CategoryKey | null;
   scoreAtLog: number | null;
-  /** ISO timestamp. */
+  /**
+   * ISO timestamp of the moment the user explicitly confirmed the
+   * day's total (usually from the 9 PM notification sheet). NULL
+   * means the day is still fluid — the UI can freely add/edit/delete
+   * entries and the total auto-rolls. Once set, the UI treats the
+   * day as confirmed but still permits edits until local midnight.
+   */
+  confirmedAt: string | null;
+  /** ISO timestamp of the last write to this daily_logs row. */
   loggedAt: string;
 }
 
@@ -626,6 +642,7 @@ interface DailyLogRow {
   notes: string | null;
   category: string | null;
   score_at_log: number | null;
+  confirmed_at: string | null;
   logged_at: string;
 }
 
@@ -642,6 +659,10 @@ function mapDailyLog(row: DailyLogRow): DailyLogRecord {
     notes: row.notes,
     category,
     scoreAtLog: row.score_at_log,
+    // Migration 002 adds this column. Older rows from a pre-002 DB
+    // return `undefined` from the driver, which we normalise to null
+    // so the store / UI never has to distinguish the two.
+    confirmedAt: row.confirmed_at ?? null,
     loggedAt: row.logged_at,
   };
 }
@@ -652,6 +673,15 @@ export interface DailyLogInput {
   notes?: string | null;
   category?: CategoryKey | null;
   scoreAtLog?: number | null;
+  /**
+   * Optional confirmation flag. When `true`, the upsert stamps
+   * `confirmed_at` with the current timestamp (if not already set).
+   * When `false` or omitted, `confirmed_at` is left untouched so a
+   * routine auto-rollup from spend_entries does not accidentally
+   * seal the day. Pass an explicit `null` only via the dedicated
+   * `setConfirmed(id, null)` helper when the intent is to un-seal.
+   */
+  confirmed?: boolean;
 }
 
 export const dailyLogsRepo = {
@@ -702,24 +732,36 @@ export const dailyLogsRepo = {
    * Insert or update the log for a given date. Matches the product
    * invariant: one log per date. Returns the stored record so the
    * caller can push it straight into the Zustand store.
+   *
+   * Confirmation semantics:
+   *   - `confirmed: true` stamps `confirmed_at = NOW()` on insert, and
+   *     on update leaves an existing `confirmed_at` alone (so the
+   *     audit timestamp of "first confirmation" is preserved across
+   *     subsequent same-day edits).
+   *   - `confirmed` omitted / false leaves `confirmed_at` untouched
+   *     on both paths. The rollup from spend_entries uses this path
+   *     so an auto-refresh of the total never accidentally seals the
+   *     day.
    */
   async upsert(input: DailyLogInput): Promise<DailyLogRecord> {
     const loggedAt = new Date().toISOString();
     const notes = input.notes ?? null;
     const category = input.category ?? null;
     const scoreAtLog = input.scoreAtLog ?? null;
+    const confirmedAt = input.confirmed ? loggedAt : null;
 
     return withDb(async (db) => {
       await db.run(
-        `INSERT INTO daily_logs (log_date, spent, notes, category, score_at_log, logged_at)
-         VALUES (?, ?, ?, ?, ?, ?)
+        `INSERT INTO daily_logs (log_date, spent, notes, category, score_at_log, confirmed_at, logged_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(log_date) DO UPDATE SET
            spent = excluded.spent,
            notes = excluded.notes,
            category = excluded.category,
            score_at_log = excluded.score_at_log,
+           confirmed_at = COALESCE(daily_logs.confirmed_at, excluded.confirmed_at),
            logged_at = excluded.logged_at;`,
-        [input.logDate, input.spent, notes, category, scoreAtLog, loggedAt],
+        [input.logDate, input.spent, notes, category, scoreAtLog, confirmedAt, loggedAt],
       );
       const res = await db.query("SELECT * FROM daily_logs WHERE log_date = ?;", [input.logDate]);
       const row = rows<DailyLogRow>(res)[0];
@@ -740,14 +782,16 @@ export const dailyLogsRepo = {
     await transaction(async (db) => {
       for (const entry of entries) {
         const loggedAt = new Date().toISOString();
+        const confirmedAt = entry.confirmed ? loggedAt : null;
         await db.run(
-          `INSERT INTO daily_logs (log_date, spent, notes, category, score_at_log, logged_at)
-           VALUES (?, ?, ?, ?, ?, ?)
+          `INSERT INTO daily_logs (log_date, spent, notes, category, score_at_log, confirmed_at, logged_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(log_date) DO UPDATE SET
              spent = excluded.spent,
              notes = excluded.notes,
              category = excluded.category,
              score_at_log = excluded.score_at_log,
+             confirmed_at = COALESCE(daily_logs.confirmed_at, excluded.confirmed_at),
              logged_at = excluded.logged_at;`,
           [
             entry.logDate,
@@ -755,10 +799,30 @@ export const dailyLogsRepo = {
             entry.notes ?? null,
             entry.category ?? null,
             entry.scoreAtLog ?? null,
+            confirmedAt,
             loggedAt,
           ],
         );
       }
+    });
+  },
+
+  /**
+   * Explicitly seal or un-seal a day. Used by the confirmation sheet
+   * (seal) and by the post-confirmation "un-confirm" affordance in
+   * the history edit flow (un-seal — rare, but documented).
+   *
+   * Accepts the ISO logDate so the UI doesn't have to round-trip
+   * through `getByDate()` to find the row id.
+   */
+  async setConfirmed(logDate: string, confirmed: boolean): Promise<void> {
+    const stamp = confirmed ? new Date().toISOString() : null;
+    await withDb(async (db) => {
+      await db.run(`UPDATE daily_logs SET confirmed_at = ?, logged_at = ? WHERE log_date = ?;`, [
+        stamp,
+        new Date().toISOString(),
+        logDate,
+      ]);
     });
   },
 
@@ -845,6 +909,265 @@ export const dailyLogsRepo = {
   async count(): Promise<number> {
     return withDb(async (db) => {
       const res = await db.query("SELECT COUNT(*) AS c FROM daily_logs;");
+      const row = rows<{ c: number }>(res)[0];
+      return row?.c ?? 0;
+    });
+  },
+} as const;
+
+/* ==================================================================
+ * spend_entries
+ * ==================================================================
+ *
+ * Individual spend events. N entries per day roll up into the single
+ * `daily_logs` row for that date. See migration 002 for the full
+ * rationale. The repo exposes two kinds of operations:
+ *
+ *   1. CRUD over entries (add / list / update / delete).
+ *   2. `rollUp(logDate)` — compute the day's total from the entries
+ *      table and write it back to `daily_logs.spent`. Called by the
+ *      store after every entry mutation so scoring never lags behind
+ *      the entries list.
+ *
+ * Note: rollUp intentionally does NOT mark the day as confirmed.
+ * Confirmation is an explicit user action, not a side-effect of
+ * adding entries.
+ * ================================================================== */
+
+export interface SpendEntryRecord {
+  id: number;
+  /** ISO date, YYYY-MM-DD. Denormalised from spentAt for fast range scans. */
+  logDate: string;
+  amount: number;
+  category: CategoryKey | null;
+  notes: string | null;
+  /** ISO timestamp of when the spend happened (user-editable). */
+  spentAt: string;
+  /** ISO timestamp of when the row was inserted. Never mutates. */
+  createdAt: string;
+  /** ISO timestamp of the most recent edit, or null if never edited. */
+  updatedAt: string | null;
+}
+
+interface SpendEntryRow {
+  id: number;
+  log_date: string;
+  amount: number;
+  category: string | null;
+  notes: string | null;
+  spent_at: string;
+  created_at: string;
+  updated_at: string | null;
+}
+
+function mapSpendEntry(row: SpendEntryRow): SpendEntryRecord {
+  const category: CategoryKey | null = row.category
+    ? isCategoryKey(row.category)
+      ? row.category
+      : "other"
+    : null;
+  return {
+    id: row.id,
+    logDate: row.log_date,
+    amount: row.amount,
+    category,
+    notes: row.notes,
+    spentAt: row.spent_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+export interface SpendEntryInput {
+  logDate: string;
+  amount: number;
+  category?: CategoryKey | null;
+  notes?: string | null;
+  /** Optional override for when the spend happened. Defaults to now. */
+  spentAt?: string;
+}
+
+export const spendEntriesRepo = {
+  /**
+   * All entries for a single day, newest first. Fed by the compound
+   * index on (log_date, spent_at DESC) so this is a pure index scan
+   * even on a device with months of history.
+   */
+  async listForDate(logDate: string): Promise<SpendEntryRecord[]> {
+    return withDb(async (db) => {
+      const res = await db.query(
+        `SELECT * FROM spend_entries WHERE log_date = ? ORDER BY spent_at DESC, id DESC;`,
+        [logDate],
+      );
+      return rows<SpendEntryRow>(res).map(mapSpendEntry);
+    });
+  },
+
+  /**
+   * Every entry within an inclusive date range. Used by the history
+   * expand-row (one day at a time) and by the insights engine's
+   * category rollup (a wider window).
+   */
+  async listBetween(fromDate: string, toDate: string): Promise<SpendEntryRecord[]> {
+    return withDb(async (db) => {
+      const res = await db.query(
+        `SELECT * FROM spend_entries
+         WHERE log_date >= ? AND log_date <= ?
+         ORDER BY log_date DESC, spent_at DESC, id DESC;`,
+        [fromDate, toDate],
+      );
+      return rows<SpendEntryRow>(res).map(mapSpendEntry);
+    });
+  },
+
+  /**
+   * Sum of entry amounts for a single day. Uses the compound index's
+   * leading column so this is O(matching rows) without touching the
+   * base table.
+   */
+  async sumForDate(logDate: string): Promise<number> {
+    return withDb(async (db) => {
+      const res = await db.query(
+        `SELECT COALESCE(SUM(amount), 0) AS total FROM spend_entries WHERE log_date = ?;`,
+        [logDate],
+      );
+      const row = rows<{ total: number }>(res)[0];
+      return row?.total ?? 0;
+    });
+  },
+
+  /**
+   * Insert a new entry. Returns the stored record so the caller can
+   * push it straight into the Zustand store without a refetch. The
+   * UI layer validates amount > 0 before calling; the CHECK constraint
+   * in migration 002 is a safety net.
+   */
+  async add(input: SpendEntryInput): Promise<SpendEntryRecord> {
+    if (!Number.isFinite(input.amount) || input.amount <= 0) {
+      throw new Error("spendEntriesRepo.add: amount must be a positive finite number");
+    }
+    const now = new Date().toISOString();
+    const spentAt = input.spentAt ?? now;
+    const category = input.category ?? null;
+    const notes = input.notes ?? null;
+
+    return withDb(async (db) => {
+      const res = await db.run(
+        `INSERT INTO spend_entries (log_date, amount, category, notes, spent_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, NULL);`,
+        [input.logDate, input.amount, category, notes, spentAt, now],
+      );
+      // SQLite plugin returns lastId via `changes.lastId` on native
+      // and via a lookup fallback on web. Fetching by lastId is the
+      // cheapest cross-platform round-trip.
+      const insertedId =
+        (res as { changes?: { lastId?: number } }).changes?.lastId ??
+        (rows<{ id: number }>(await db.query(`SELECT last_insert_rowid() AS id;`))[0] ?? { id: 0 })
+          .id;
+      const row = rows<SpendEntryRow>(
+        await db.query(`SELECT * FROM spend_entries WHERE id = ?;`, [insertedId]),
+      )[0];
+      if (!row) {
+        throw new Error("spendEntriesRepo.add: inserted row could not be re-read");
+      }
+      return mapSpendEntry(row);
+    });
+  },
+
+  /**
+   * Patch an existing entry. All fields optional; at least one must
+   * change for a meaningful call. Updates `updated_at` on every
+   * successful edit so the UI can badge recently-edited entries.
+   */
+  async update(
+    id: number,
+    patch: Partial<Pick<SpendEntryRecord, "amount" | "category" | "notes" | "spentAt">>,
+  ): Promise<void> {
+    const sets: string[] = [];
+    const values: unknown[] = [];
+
+    if (patch.amount !== undefined) {
+      if (!Number.isFinite(patch.amount) || patch.amount <= 0) {
+        throw new Error("spendEntriesRepo.update: amount must be a positive finite number");
+      }
+      sets.push("amount = ?");
+      values.push(patch.amount);
+    }
+    if (patch.category !== undefined) {
+      sets.push("category = ?");
+      values.push(patch.category);
+    }
+    if (patch.notes !== undefined) {
+      sets.push("notes = ?");
+      values.push(patch.notes);
+    }
+    if (patch.spentAt !== undefined) {
+      sets.push("spent_at = ?");
+      values.push(patch.spentAt);
+    }
+    if (sets.length === 0) return;
+
+    sets.push("updated_at = ?");
+    values.push(new Date().toISOString());
+
+    values.push(id);
+    await withDb(async (db) => {
+      await db.run(`UPDATE spend_entries SET ${sets.join(", ")} WHERE id = ?;`, values);
+    });
+  },
+
+  async delete(id: number): Promise<void> {
+    await withDb(async (db) => {
+      await db.run(`DELETE FROM spend_entries WHERE id = ?;`, [id]);
+    });
+  },
+
+  /**
+   * Recompute the day's total from `spend_entries` and write it back
+   * to `daily_logs.spent`. Creates the `daily_logs` row if it doesn't
+   * exist yet (first entry for a fresh date). Never mutates
+   * `confirmed_at` — confirmation remains an explicit user action.
+   *
+   * Returns the updated total. A return value of 0 with no pre-existing
+   * `daily_logs` row is a no-op (we don't materialise empty days).
+   */
+  async rollUp(logDate: string, scoreAtLog: number | null = null): Promise<number> {
+    const total = await this.sumForDate(logDate);
+    const now = new Date().toISOString();
+
+    await withDb(async (db) => {
+      // Check for an existing daily_logs row. We want "create if
+      // missing" semantics, but only when there's something to record.
+      const existing = rows<DailyLogRow>(
+        await db.query(`SELECT * FROM daily_logs WHERE log_date = ?;`, [logDate]),
+      )[0];
+
+      if (!existing && total === 0) {
+        // Nothing to write — no entries and no existing row.
+        return;
+      }
+
+      await db.run(
+        `INSERT INTO daily_logs (log_date, spent, notes, category, score_at_log, confirmed_at, logged_at)
+         VALUES (?, ?, NULL, NULL, ?, NULL, ?)
+         ON CONFLICT(log_date) DO UPDATE SET
+           spent = excluded.spent,
+           score_at_log = COALESCE(daily_logs.score_at_log, excluded.score_at_log),
+           logged_at = excluded.logged_at;`,
+        [logDate, total, scoreAtLog, now],
+      );
+    });
+
+    return total;
+  },
+
+  /**
+   * Total row count — symmetric with dailyLogsRepo.count() so the
+   * insights engine can gate entry-aware cards on data volume.
+   */
+  async count(): Promise<number> {
+    return withDb(async (db) => {
+      const res = await db.query(`SELECT COUNT(*) AS c FROM spend_entries;`);
       const row = rows<{ c: number }>(res)[0];
       return row?.c ?? 0;
     });
@@ -1063,6 +1386,7 @@ export interface DbDump {
   balanceSnapshots: BalanceSnapshotRecord[];
   manualCredits: ManualCreditRecord[];
   dailyLogs: DailyLogRecord[];
+  spendEntries: SpendEntryRecord[];
 }
 
 export async function dumpAllTables(): Promise<DbDump> {
@@ -1074,6 +1398,7 @@ export async function dumpAllTables(): Promise<DbDump> {
     balanceSnapshots,
     manualCredits,
     dailyLogs,
+    spendEntries,
   ] = await Promise.all([
     userRepo.get(),
     settingsRepo.get(),
@@ -1082,6 +1407,13 @@ export async function dumpAllTables(): Promise<DbDump> {
     balanceSnapshotsRepo.history(50),
     manualCreditsRepo.listAll(),
     dailyLogsRepo.listRecent(90),
+    // 90-day rolling window of entries — enough for history expand
+    // rows and the category pie chart. The export path walks the
+    // same window, so exports stay bounded.
+    spendEntriesRepo.listBetween(
+      new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+      new Date().toISOString().slice(0, 10),
+    ),
   ]);
   return {
     user,
@@ -1091,5 +1423,6 @@ export async function dumpAllTables(): Promise<DbDump> {
     balanceSnapshots,
     manualCredits,
     dailyLogs,
+    spendEntries,
   };
 }

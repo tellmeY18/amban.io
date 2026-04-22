@@ -29,7 +29,7 @@ import BottomSheet from "../../components/ui/BottomSheet";
 import CurrencyInput from "../../components/ui/CurrencyInput";
 
 import { useDailyStore } from "../../stores/dailyStore";
-import type { DailyLog } from "../../stores/dailyStore";
+import type { DailyLog, SpendEntry } from "../../stores/dailyStore";
 import { CATEGORY_BY_KEY } from "../../constants/categories";
 
 import { Icons, CATEGORY_ICONS } from "../../theme/icons";
@@ -138,6 +138,7 @@ interface EditDraft {
 const LogHistory: React.FC = () => {
   const history = useHistory();
   const logs = useDailyStore((s) => s.logs);
+  const entriesByDate = useDailyStore((s) => s.entriesByDate);
   const hydrated = useDailyStore((s) => s.hydrated);
   const updateLog = useDailyStore((s) => s.updateLog);
   const deleteLog = useDailyStore((s) => s.deleteLog);
@@ -494,6 +495,21 @@ const LogHistory: React.FC = () => {
                             Score that day: {formatINR(Math.round(log.scoreAtLog))}
                           </span>
                         ) : null}
+                        {log.confirmedAt ? (
+                          <span
+                            style={{
+                              fontSize: "var(--text-caption)",
+                              color: "var(--color-score-excellent)",
+                              fontWeight: "var(--font-weight-semibold)",
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: 4,
+                            }}
+                          >
+                            <IonIcon icon={Icons.action.check} aria-hidden="true" />
+                            Confirmed
+                          </span>
+                        ) : null}
                         {log.notes ? (
                           <p
                             style={{
@@ -506,6 +522,7 @@ const LogHistory: React.FC = () => {
                             {log.notes}
                           </p>
                         ) : null}
+                        <ExpandedEntriesList entries={entriesByDate[log.logDate] ?? []} />
                         <div
                           style={{
                             display: "flex",
@@ -651,3 +668,128 @@ const LogHistory: React.FC = () => {
 };
 
 export default LogHistory;
+
+/* ==================================================================
+ * ExpandedEntriesList
+ *
+ * Rendered inside an expanded history row. Shows the per-entry
+ * breakdown for that date when `spend_entries` exist for it. A day
+ * that was backfilled (no entries, only a daily_logs row) renders a
+ * quiet hint instead — we don't want an empty "Entries" block
+ * screaming at the user.
+ *
+ * Entries are read-only in the history view. To edit, the user goes
+ * back to the Daily Log screen while the day is still within its
+ * midnight-edit window. This keeps the history surface focused on
+ * review rather than data entry.
+ * ================================================================== */
+
+const ExpandedEntriesList: React.FC<{ entries: SpendEntry[] }> = ({ entries }) => {
+  if (entries.length === 0) {
+    return (
+      <span
+        style={{
+          fontSize: "var(--text-caption)",
+          color: "var(--text-muted)",
+          fontStyle: "italic",
+        }}
+      >
+        No per-entry detail for this day.
+      </span>
+    );
+  }
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: "var(--space-xs)",
+        marginTop: "var(--space-xs)",
+      }}
+    >
+      <span
+        style={{
+          fontSize: "var(--text-caption)",
+          fontWeight: "var(--font-weight-semibold)",
+          color: "var(--text-muted)",
+          letterSpacing: "0.02em",
+          textTransform: "uppercase",
+        }}
+      >
+        Entries ({entries.length})
+      </span>
+      <ul
+        style={{
+          listStyle: "none",
+          margin: 0,
+          padding: 0,
+          display: "flex",
+          flexDirection: "column",
+          gap: 2,
+        }}
+      >
+        {entries.map((entry) => {
+          const cat = entry.category ? CATEGORY_BY_KEY[entry.category] : null;
+          return (
+            <li
+              key={entry.id}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "var(--space-sm)",
+                padding: "var(--space-xs) var(--space-sm)",
+                borderRadius: "var(--radius-sm)",
+                backgroundColor: "var(--surface-sunken)",
+              }}
+            >
+              <span
+                aria-hidden="true"
+                style={{
+                  width: 24,
+                  height: 24,
+                  borderRadius: "var(--radius-pill)",
+                  backgroundColor: cat ? `${cat.colorHex}22` : "var(--surface-raised)",
+                  color: cat ? cat.colorHex : "var(--text-muted)",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  flexShrink: 0,
+                }}
+              >
+                <IonIcon
+                  icon={CATEGORY_ICONS[entry.category ?? "other"]}
+                  style={{ fontSize: 14 }}
+                />
+              </span>
+              <span
+                style={{
+                  flex: 1,
+                  fontSize: "var(--text-caption)",
+                  color: "var(--text-strong)",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {cat?.label ?? "Uncategorised"}
+                {entry.notes ? ` · ${entry.notes}` : ""}
+              </span>
+              <span
+                style={{
+                  fontSize: "var(--text-caption)",
+                  fontWeight: "var(--font-weight-semibold)",
+                  color: "var(--text-strong)",
+                  fontVariantNumeric: "tabular-nums",
+                  flexShrink: 0,
+                }}
+              >
+                {formatINR(Math.round(entry.amount))}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+};

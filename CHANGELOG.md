@@ -84,7 +84,7 @@ is intentionally out of scope for the alpha).
 
 - Initial project documentation: `CLAUDE.md` (product spec), `ROADMAP.md`
   (execution plan), and `README.md` (setup + working agreements).
-- AGPL-3.0 license.
+- GPL-3.0-or-later license.
 - Ionic React + Vite + TypeScript scaffold generated via the Ionic CLI
   blank starter, rebranded to `amban` with bundle id `io.amban.app`.
 - Capacitor plugins installed and declared in `capacitor.config.ts`:
