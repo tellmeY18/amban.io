@@ -79,6 +79,157 @@ is intentionally out of scope for the alpha).
 
 ---
 
+## [0.1.3] — 2026-04-22
+
+Second hotfix on the v0.1.1 → v0.1.2 chain. v0.1.2 registered
+migration 002 in the runner's catalogue (the real bug), but the
+migration still failed on native Android because
+`@capacitor-community/sqlite`'s `execute(sql, transaction=true)`
+splits the script on `;` with a naive splitter that does not
+track string-literal or comment state. Migration 001 slipped
+through because its comments are short; migration 002 carries
+long prose blocks, a `CHECK (amount > 0)` expression adjacent to
+`--` comments, and several column-separating comment lines — the
+splitter handed the native binding unparseable fragments like
+`amount REAL NOT NULL CHECK (amount > 0)` followed by `, category
+TEXT,`, and the whole migration rolled back with a vague syntax
+error. Fresh installs and v0.1.2-upgraded devices alike stayed
+stuck at `schema_version = 1`, and the Daily Log screen kept
+crashing as if v0.1.2 had never shipped.
+
+### Fixed
+
+- **Migration 002 actually applies now on native Android.**
+  `src/db/db.ts` gains a `stripSqlComments(sql)` preprocessor
+  that removes block comments, line comments (while respecting
+  single-quoted string state so literals like `'10--20'` are
+  untouched), and trailing whitespace before the SQL reaches
+  the plugin. Every migration — past, present, future — goes
+  through the same normalisation step, so comment-heavy SQL
+  files no longer depend on the plugin's splitter being clever.
+  The migration files themselves remain immutable (Appendix J);
+  this fix lives purely in the runner.
+- **Richer migration-failure diagnostics.** When a migration
+  throws, the error message now includes a single-line preview
+  of the first 500 characters of the normalised SQL. The
+  escape-hatch screen (and anyone running `adb logcat`) sees
+  exactly which statement the binding choked on — no need to
+  reproduce the failure to diagnose it.
+
+### Changed
+
+- Version synced to `0.1.3` / `versionCode 103` across
+  `package.json`, `package-lock.json`,
+  `android/app/build.gradle`, doc-comment example strings, and
+  the `workflow_dispatch` default — via
+  `scripts/bump-version.sh 0.1.3`.
+- One minor TypeScript tightness fix on the preprocessor's
+  `filter` callback to satisfy `noUncheckedIndexedAccess`
+  (explicit `prev !== undefined` guard before the length check).
+
+### Verified locally
+
+- `stripSqlComments` reduces `001_init.sql` from 4 589 B to
+  2 002 B (13 statements, zero residual `--` / `/*`) and
+  `002_spend_entries.sql` from 7 713 B to 506 B (4 statements,
+  zero residual comments). Stripped output applied via the
+  `sqlite3` CLI inside the Nix shell — wrapped in
+  `BEGIN;…COMMIT;` to mirror the plugin's transaction mode — to
+  confirm it produces the expected 8-table schema with
+  `daily_logs.confirmed_at` present.
+- APK signed with the pinned project debug certificate
+  (`d9:65:07:67:…`) — upgrades cleanly in place from v0.1.1 and
+  v0.1.2.
+
+### Migration notes
+
+- A device at `schema_version = 1` (fresh install of v0.1.1 or
+  v0.1.2, or a clean upgrade from v0.1.0) runs the fixed 002
+  on first launch of 0.1.3 and reaches `schema_version = 2`.
+- A device that somehow reached `schema_version = 2` under an
+  earlier build (there is no known path to this — the failure
+  rolled back the transaction — but the runner is robust to it)
+  is already at the target and runs nothing.
+- No data is lost on any upgrade path. No user-visible reset is
+  required.
+- `002_spend_entries.sql` remains byte-for-byte unchanged. The
+  shipped SQL was never wrong; the runner was.
+
+### Release-engineering guardrail (still tracked for v0.2)
+
+A boot-path integration test that reconciles the on-disk
+migration files against the runner's catalogue AND confirms
+every migration applies cleanly on the native binding is still
+the right guardrail for this class of bug. Deferred to v0.2;
+manual verification with the `sqlite3` CLI has caught both
+regressions in this alpha cycle.
+
+---
+
+## [0.1.2] — 2026-04-22
+
+Hotfix release. v0.1.1 shipped the `spend_entries` migration file
+(`src/db/migrations/002_spend_entries.sql`) but forgot to register
+it in the migration runner's catalogue (`src/db/db.ts`). Fresh
+installs therefore stopped at `schema_version = 1` — the
+`spend_entries` table and the `daily_logs.confirmed_at` column
+never existed at runtime — and the rewritten Daily Log screen
+crashed on the first attempt to add an entry or confirm a day.
+Devices that had upgraded from v0.1.0 had the same outcome;
+migration 002 was silently a no-op for everyone.
+
+### Fixed
+
+- **Fresh install crash on the Daily Log screen** — migration
+  002 (`spend_entries`) is now registered in the `MIGRATIONS`
+  array in `src/db/db.ts`. On next launch the runner picks up
+  the gap (persisted `schema_version = 1`, target = 2), applies
+  the missing migration inside a single transaction, and
+  persists the new version. Existing v0.1.1 installs self-heal
+  on first launch of 0.1.2 — no user-visible reset required, no
+  data lost.
+- Added an explicit comment in `src/db/db.ts` next to the
+  `MIGRATIONS` array calling out that a `.sql` file living in
+  `migrations/` does nothing until it is registered here. This
+  is the class of bug that caused 0.1.1; the comment exists so
+  future contributors notice the registration step without
+  needing to read the whole runner.
+
+### Changed
+
+- Version synced to `0.1.2` / `versionCode 102` across
+  `package.json`, `package-lock.json`,
+  `android/app/build.gradle`, doc-comment example strings in
+  `src/constants/buildInfo.ts` and `src/utils/exportData.ts`,
+  and the `workflow_dispatch` default in
+  `.github/workflows/release.yml` — all via
+  `scripts/bump-version.sh 0.1.2`.
+
+### Migration notes
+
+- A device upgrading from a working **v0.1.0** install runs
+  migration 002 for the first time on launch of 0.1.2. No
+  existing rows are rewritten.
+- A device that installed the broken **v0.1.1** is at
+  `schema_version = 1` just like v0.1.0 was — the broken build
+  never actually applied 002, so the upgrade path is identical.
+- A fresh install on 0.1.2 runs 001 + 002 in a single
+  transaction and lands at `schema_version = 2`.
+- Per `CLAUDE.md` Appendix J, `002_spend_entries.sql` remains
+  immutable from here on — the bug was in the runner's
+  catalogue, not in the SQL itself, so nothing about the
+  shipped migration file needed to change.
+
+### Release-engineering guardrail
+
+- The release workflow's `Assemble debug-signed APK` +
+  `Verify APK signature against project keystore` pair is
+  unchanged. No new guardrail was added for "migration file
+  exists but isn't registered" — the correct place to catch
+  that is a boot-path integration test, tracked for v0.2.
+
+---
+
 ## [0.1.1] — 2026-04-22
 
 Second alpha release. Primary theme: the daily log finally matches how

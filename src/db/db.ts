@@ -53,6 +53,7 @@ import { migrationFlags } from "./preferences";
  * ------------------------------------------------------------------ */
 
 import migration001 from "./migrations/001_init.sql?raw";
+import migration002 from "./migrations/002_spend_entries.sql?raw";
 
 interface MigrationDefinition {
   version: number;
@@ -63,9 +64,19 @@ interface MigrationDefinition {
 /**
  * The full, ordered migration list. Add new entries at the end.
  * Never reorder, never edit a past entry — follow Appendix J.
+ *
+ * A registered migration is the ONLY way the runner knows a SQL file
+ * exists — the file itself living in `migrations/` does nothing on
+ * its own. Forgetting to register a shipped migration leaves fresh
+ * installs stuck at a lower schema version than the code expects,
+ * which is how v0.1.1 first shipped broken for new users: the
+ * `spend_entries` table and `daily_logs.confirmed_at` column were
+ * authored but never applied, so the rewritten Daily Log screen
+ * crashed on the first `INSERT INTO spend_entries`.
  */
 const MIGRATIONS: ReadonlyArray<MigrationDefinition> = [
   { version: 1, name: "init", sql: migration001 },
+  { version: 2, name: "spend_entries", sql: migration002 },
 ];
 
 /* ------------------------------------------------------------------
@@ -285,6 +296,147 @@ export async function wipeDb(): Promise<void> {
  *      the last successful version left off.
  * ------------------------------------------------------------------ */
 
+/**
+ * Strip SQL comments and collapse runs of whitespace so the plugin's
+ * statement splitter never has to reason about a `;` that lives
+ * inside a comment, and so a migration file can be authored with as
+ * much prose as the author wants without worrying about the runner.
+ *
+ * Why this exists
+ * ---------------
+ * `@capacitor-community/sqlite`'s `execute(sql, transaction=true)`
+ * splits the script on `;` before handing each statement to the
+ * native binding. The splitter is intentionally simple — it does
+ * NOT track whether a `;` is inside a string literal, a `--` line
+ * comment, or a `/* … *\/` block comment. Most migration authors
+ * never hit the edge: 001 slipped through fine because its comments
+ * were short. But 002 carries long prose comment blocks, a `CHECK`
+ * constraint with a paren-wrapped expression (`amount > 0`) sitting
+ * right next to a `--` comment, and several `-- …` lines that break
+ * up column definitions. On the native Android binding this causes
+ * the plugin to hand the C layer a fragment like "amount REAL NOT
+ * NULL CHECK (amount > 0)" followed by another fragment starting
+ * with ", category TEXT," — which is an unparseable prefix and
+ * fails the whole migration with a vague syntax error.
+ *
+ * The SQL files stay authoritative and immutable (Appendix J); we
+ * normalise here in the runner so every migration — past, present,
+ * future — gets the same treatment without needing to police comment
+ * style in review.
+ *
+ * Rules
+ * -----
+ *   - Block comments `/* … *\/` are removed in full, including any
+ *     `;` that happens to live inside them.
+ *   - Line comments `-- …` are removed from the `--` marker to end
+ *     of line, but only when `--` is not inside a single-quoted
+ *     string literal. The naive split on `--` would mangle a
+ *     legitimate amount like `'10--20'`; our scanner tracks quote
+ *     state to avoid that.
+ *   - Adjacent blank lines are collapsed; trailing whitespace on
+ *     each retained line is stripped. The splitter only cares about
+ *     `;`, but tidy input makes any error surface line-number-accurate.
+ *
+ * This function is a pure string → string transform. No plugin
+ * calls, no I/O, no state. The migration SQL we ship stays the
+ * source of truth; this is the runner meeting it halfway.
+ */
+export function stripSqlComments(sql: string): string {
+  let out = "";
+  const n = sql.length;
+  let i = 0;
+
+  // Scanner state. Only one of these can be true at a time; the
+  // condition checks below enforce that.
+  let inSingleQuote = false;
+  let inLineComment = false;
+  let inBlockComment = false;
+
+  while (i < n) {
+    const ch = sql[i];
+    const next = i + 1 < n ? sql[i + 1] : "";
+
+    if (inLineComment) {
+      // A line comment ends at the next newline. We drop the
+      // comment body but retain the newline so line numbers in any
+      // downstream error message line up with the original file.
+      if (ch === "\n") {
+        inLineComment = false;
+        out += "\n";
+      }
+      i += 1;
+      continue;
+    }
+
+    if (inBlockComment) {
+      if (ch === "*" && next === "/") {
+        inBlockComment = false;
+        i += 2;
+        continue;
+      }
+      // Preserve newlines inside block comments so line numbers
+      // survive the strip.
+      if (ch === "\n") out += "\n";
+      i += 1;
+      continue;
+    }
+
+    if (inSingleQuote) {
+      out += ch;
+      if (ch === "'") {
+        // SQL escapes a single quote by doubling it ('' means a
+        // literal quote, not the end of the string).
+        if (next === "'") {
+          out += next;
+          i += 2;
+          continue;
+        }
+        inSingleQuote = false;
+      }
+      i += 1;
+      continue;
+    }
+
+    // Not inside any commentary / string — look for openers.
+    if (ch === "-" && next === "-") {
+      inLineComment = true;
+      i += 2;
+      continue;
+    }
+    if (ch === "/" && next === "*") {
+      inBlockComment = true;
+      i += 2;
+      continue;
+    }
+    if (ch === "'") {
+      inSingleQuote = true;
+      out += ch;
+      i += 1;
+      continue;
+    }
+
+    out += ch;
+    i += 1;
+  }
+
+  // Collapse any run of blank lines + trim trailing whitespace so the
+  // final script is compact without losing statement separators.
+  return out
+    .split("\n")
+    .map((line) => line.replace(/[ \t]+$/g, ""))
+    .filter((line, idx, arr) => {
+      if (line.length > 0) return true;
+      // Keep at most one consecutive blank line to preserve some
+      // visual structure for anyone who `.dump`s the DB. The
+      // explicit-undefined guard is for `noUncheckedIndexedAccess`;
+      // `idx > 0` already implies the previous index is in bounds.
+      const prev = idx > 0 ? arr[idx - 1] : undefined;
+      return prev !== undefined && prev.length > 0;
+    })
+    .join("\n")
+    .trim();
+}
+
 export async function runMigrations(db: SQLiteDBConnection): Promise<void> {
   const currentVersion = await migrationFlags.getVersion();
   const pending = MIGRATIONS.filter((m) => m.version > currentVersion).sort(
@@ -298,16 +450,32 @@ export async function runMigrations(db: SQLiteDBConnection): Promise<void> {
   }
 
   for (const migration of pending) {
+    // Normalise the SQL before handing it to the plugin. See
+    // `stripSqlComments` above for why this exists. The original
+    // file is still the source of truth — this is runner-side
+    // preprocessing, not a rewrite of the shipped migration.
+    const cleanSql = stripSqlComments(migration.sql);
+
     try {
       // `transaction: true` asks the plugin to wrap the script in a
       // BEGIN/COMMIT pair and ROLLBACK on any statement error. We pair
       // that with our own persisted version bump so partial application
       // across migrations is impossible.
-      await db.execute(migration.sql, /* transaction */ true);
+      await db.execute(cleanSql, /* transaction */ true);
       await migrationFlags.setVersion(migration.version);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      throw new Error(`Migration ${migration.version} (${migration.name}) failed: ${message}`);
+      // Enrich the error with the migration identity AND the first
+      // few lines of the (normalised) SQL so the reset-escape-hatch
+      // screen can show a user / developer exactly what went wrong
+      // without needing a reproduction step. Truncated to stay within
+      // the Preferences blob size budget.
+      const preview = cleanSql.slice(0, 500).replace(/\s+/g, " ").trim();
+      throw new Error(
+        `Migration ${migration.version} (${migration.name}) failed: ${message} — preview: ${preview}${
+          cleanSql.length > 500 ? "…" : ""
+        }`,
+      );
     }
   }
 
