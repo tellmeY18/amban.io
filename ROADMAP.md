@@ -48,6 +48,7 @@ Legend: ✅ done · 🟡 in progress · ⬜ not started
 | **Phase 19 — Burst Income / Manual Credits (v0.2.0)** | ⬜ not started | Promotes the existing `manual_credits` plumbing to a first-class user-facing flow per §6.6. New "+ Add income" surface on Log tab, sign-aware interleaved history rows, edit/delete with score recalc. |
 | **Phase 20 — SMS Capture & Auto-Suggestions (v0.2.0, Android)** | ⬜ not started | Custom `@amban/sms-reader` Capacitor plugin, on-device parser, `sms_suggestions` table, one-tap-accept inbox on Home + Log. Full spec in §15. Live BroadcastReceiver + widget deferred to v0.3. |
 | **Phase 21 — Notifications Hardening (v0.2.0)** | ⬜ not started | Make the daily prompt actually fire on real devices. Android 13+ runtime permission flow, exact-alarm gating, OEM battery-saver diagnostics, dev-only test-fire button, end-to-end on-device verification matrix. |
+| **Phase 22 — Android Instrumented E2E Testing (v0.2.0)** | ⬜ not started | Full instrumented test suite on an emulated Android device. Espresso + Espresso-Web driving the Capacitor WebView. Every user flow (§6), every edge case (§13), every plugin integration (SQLite, Preferences, Notifications, SMS Reader) exercised on the real native binding. CI-gated via GitHub Actions + `reactivecircus/android-emulator-runner`. Nightly extended matrix across API 23–34. No release tag without the suite green. Full spec in §17, matrix in Appendix K. |
 
 ### Phases 6 – 12 — what landed this session
 
@@ -149,8 +150,9 @@ Legend: ✅ done · 🟡 in progress · ⬜ not started
 20. [Phase 19 — Burst Income / Manual Credits (v0.2.0)](#phase-19--burst-income--manual-credits-v020)
 21. [Phase 20 — SMS Capture & Auto-Suggestions (v0.2.0)](#phase-20--sms-capture--auto-suggestions-v020)
 22. [Phase 21 — Notifications Hardening (v0.2.0)](#phase-21--notifications-hardening-v020)
-23. [Cross-cutting Tracks](#cross-cutting-tracks)
-24. [Definition of Done for Initial Release](#definition-of-done-for-initial-release)
+23. [Phase 22 — Android Instrumented E2E Testing (v0.2.0)](#phase-22--android-instrumented-e2e-testing-v020)
+24. [Cross-cutting Tracks](#cross-cutting-tracks)
+25. [Definition of Done for Initial Release](#definition-of-done-for-initial-release)
 
 ---
 
@@ -568,6 +570,127 @@ Exit criteria: A v0.2.0 user with notifications enabled receives the daily promp
 
 ---
 
+## Phase 22 — Android Instrumented E2E Testing (v0.2.0)
+
+> The automated release gate. If the suite is red, the tag doesn't ship.
+
+Reference: [`CLAUDE.md` §17](./CLAUDE.md#17-android-instrumented-e2e-testing), [Appendix K](./CLAUDE.md#appendix-k-e2e-test-matrix).
+
+This phase builds the full instrumented test suite that exercises every user-facing feature and edge case on an emulated Android device before release. amban.io is local-only — there is no server to mock. The only way to prove it works is to drive the compiled APK on a real Android runtime.
+
+### Scaffolding & Helpers
+
+- **Espresso-Web helper (`WebViewHelper.java`).** Utility class that wraps Espresso-Web interactions against the Capacitor WebView. Provides methods to wait for the WebView to be idle, find elements by `data-testid` / `aria-label` / CSS selector, type into WebView inputs, and assert visible text content. Every E2E test delegates WebView interaction through this helper.
+- **DB seeder (`DbSeeder.java`).** Seeds SQLite with a known state (onboarded user, balance, income, recurring, daily logs) for each prior shipped schema version. Provides named factory methods (`seedOnboardedUser`, `seedWithLogs`, `seedAtSchemaVersion`) so tests stay declarative. Reads fixture files from `androidTest/assets/`.
+- **SMS injector (`EmulatorSmsInjector.java`).** Inserts SMS rows into the emulator's `Telephony.Sms` content provider for parser and SMS-capture tests. Wraps `ContentResolver.insert()` with the fixtures from `androidTest/assets/sms_fixtures.json`.
+- **Gradle test dependencies.** Add `androidTestImplementation` entries for `espresso-core`, `espresso-web`, `espresso-intents`, `uiautomator`, and `test-runner` to `android/app/build.gradle`.
+
+### E2E Flow Tests
+
+| Test Class | Spec Ref | What It Proves |
+|---|---|---|
+| `OnboardingFlowTest` | §6.1, §13.8 | Full onboarding end-to-end (name → income → balance → recurring → notifications → score). Kill-and-resume mid-flow. Relaunch lands on Home. |
+| `DailyUseFlowTest` | §6.2, §8.3, §9.2, §13.6 | Log a spend, score drops by `spend/daysLeft`. Quick-amount chips are additive. Backfill missed days. Post-save toast tone matches rule. |
+| `BalanceUpdateFlowTest` | §6.3, §8.3 | Update balance, score recalculates, new `balance_snapshots` row. |
+| `IncomeCreditFlowTest` | §6.4 | Salary-day banner visible on credit day, balance update prefilled with `currentBalance + incomeAmount`. |
+| `RecurringPaymentFlowTest` | §6.5 | Upcoming payment chips appear within `UPCOMING_PAYMENT_WARN_DAYS`. |
+| `ManualCreditFlowTest` | §6.6 | Add burst income, score increases, `manual_credits` row inserted. |
+| `SmsCaptureFlowTest` | §15 | Grant `READ_SMS`, enable capture, trigger scan, verify inbox, accept as spend/income, dismiss. |
+| `ResetAppFlowTest` | Appendix I | Full wipe, all tables empty, Welcome screen, re-onboarding succeeds. |
+
+### Scoring & Edge Case Tests
+
+| Test Class | Spec Ref | What It Proves |
+|---|---|---|
+| `AmbanScoreTest` | §8.1, §8.2 | Score formula on the native SQLite binding. Status colour thresholds (healthy / watch / critical). |
+| `ScoreEdgeCasesTest` | §13.1–§13.8 | First day (no logs) → green. Income day = today → full cycle. Multiple sources → earliest wins. Day-31 clamping. Negative balance → ₹0 clamped. Recurring already paid → not double-deducted. |
+| `ScoreRecalcTriggersTest` | §8.3 | Score recalculates after: log save, balance update, income add/edit/delete, recurring add/edit/delete. |
+
+### Database Migration Tests
+
+| Test Class | Spec Ref | What It Proves |
+|---|---|---|
+| `FreshInstallMigrationTest` | §14.8 check 1 | Empty DB → all migrations → schema version = latest. |
+| `UpgradeMatrixTest` | §14.8 check 2 | For each prior shipped version: seed, run migrations, assert all rows survive. |
+| `CatalogueDriftTest` | §14.8 check 3 | `MIGRATION_CATALOG` matches on-disk `migrations/` exactly. |
+| `CommentHeavySqlTest` | §14.8 check 4 | Migration 002 (the v0.1.2 culprit) applies on the native binding. |
+| `BackupRoundTripTest` | §14.8 check 5 | Take backup, corrupt live DB, restore, verify all rows intact. |
+
+### Notification Tests
+
+| Test Class | Spec Ref | What It Proves |
+|---|---|---|
+| `NotificationScheduleTest` | §10, Appendix E | Daily prompt (id=1000) is present in pending notifications after schedule. Recurring and salary notifications in their ID ranges. |
+| `PermissionFlowTest` | §10, Phase 21 | `POST_NOTIFICATIONS` runtime dialog appears on API 33+, grant works. |
+| `DeepLinkTest` | §10.1 | `amban://log` routes to the Daily Log screen. |
+
+### SMS Tests
+
+| Test Class | Spec Ref | What It Proves |
+|---|---|---|
+| `SmsReaderPluginTest` | §15.2 | Native plugin permission check + read through the real `Telephony` provider. |
+| `SmsParserAccuracyTest` | §15.5 | ≥ 90% (18/20) fixtures parsed correctly on the native runtime. |
+| `SmsSuggestionLifecycleTest` | §15.6 | Accept as spend → `linked_log_id` set. Accept as income → `linked_credit_id` set. Dismiss → never in pending again. |
+
+### Settings & Privacy Tests
+
+| Test Class | Spec Ref | What It Proves |
+|---|---|---|
+| `ThemeToggleTest` | §9.5 | Light → dark → system toggles work; `data-theme` attribute correct. |
+| `ExportDataTest` | Phase 13 | Exported JSON parses, contains expected top-level keys. |
+| `PrivacyZeroNetworkTest` | §12 | Full flow (onboarding → log → insights → settings → export) with network disabled: zero failures, zero outbound connections in logcat. |
+
+### CI Workflow (`e2e-android.yml`)
+
+- Runs on every push to `main` and every PR targeting `main`.
+- Steps: checkout → Java 17 → Node (`.nvmrc`) → `npm ci` → `npm run build` → `npx cap sync android` → spin up API 34 Pixel 6 emulator via `reactivecircus/android-emulator-runner@v2` (KVM-accelerated, headless, `swiftshader_indirect` GPU) → `./gradlew connectedAndroidTest` → upload HTML test reports as artifact.
+- Timeout: 45 minutes.
+- **Release gate rule:** the `e2e-android` workflow must be green on the same commit SHA before `git tag`. The release workflow checks this.
+
+### Nightly Extended Matrix
+
+A cron-triggered nightly job runs the full suite across five emulator profiles:
+
+| API Level | Profile | Purpose |
+|---|---|---|
+| 23 (6.0) | Nexus 5 | Minimum supported API |
+| 28 (9) | Pixel 3 | Pre-notification-channel baseline |
+| 30 (11) | Pixel 4 | Scoped storage boundary |
+| 33 (13) | Pixel 6 | `POST_NOTIFICATIONS` runtime permission boundary |
+| 34 (14) | Pixel 7 | Latest stable |
+
+Failures auto-create a GitHub issue tagged `e2e-nightly-failure` with the profile, failing test, and logcat excerpt.
+
+### Test Data Discipline
+
+- **No hardcoded dates.** Clock abstraction or parameterised `today`.
+- **Isolated state.** `@Before` wipes DB + Preferences. No inter-test dependencies.
+- **Fixture files over inline data.** SMS fixtures, migration snapshots, seeded DB states in `androidTest/assets/`.
+- **Deterministic amounts.** Coprime values (₹1,111 / ₹2,222 / ₹3,333) so assertions are unambiguous.
+
+### Local Dev Workflow
+
+```bash
+# Start the emulator
+emulator -avd Pixel_6_API_34 -no-snapshot -gpu host
+
+# Build web + sync into native project
+npm run build && npx cap sync android
+
+# Run the full suite
+cd android && ./gradlew connectedAndroidTest
+
+# Run a single test class
+./gradlew connectedAndroidTest \
+  -Pandroid.testInstrumentationRunnerArguments.class=io.amban.app.e2e.OnboardingFlowTest
+```
+
+Results in `android/app/build/reports/androidTests/connected/`.
+
+Exit criteria: Every row in [Appendix K](./CLAUDE.md#appendix-k-e2e-test-matrix) is green on the CI emulator. The nightly extended matrix has run at least once clean across all five API levels. A developer can clone the repo, start an emulator, and run the full suite with three commands. No release tag ships without the `e2e-android` workflow green on that commit.
+
+---
+
 ## Cross-cutting Tracks
 
 These tracks run continuously alongside every phase. They don't have their own section in the sequence, but the release isn't done if they're behind.
@@ -614,3 +737,5 @@ v0.2.0 is in addition to (not a replacement for) the initial-release checklist a
 5. SMS Capture (§15 / Phase 20) is shippable on Android: opt-in, parses real-world UPI + card SMS at ≥90% accuracy on the test fixture set, one-tap accept routes correctly to spend or income, zero network calls in the bundle.
 6. The daily notification prompt has been observed firing on a real device for at least three consecutive days across the Pixel + one OEM bucket, with the deep-link routing into `/log`.
 7. iOS build still compiles cleanly with all SMS surfaces gated off and no regressions in the existing Phase 13 surfaces.
+8. The `e2e-android` CI workflow is green: every row in Appendix K passes on the API 34 emulator, and the nightly extended matrix (API 23–34) has completed at least one clean run.
+9. A new contributor can clone the repo, start an emulator, and execute the full instrumented suite with `npm run build && npx cap sync android && cd android && ./gradlew connectedAndroidTest` — no manual setup beyond the emulator AVD.

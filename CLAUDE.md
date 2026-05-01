@@ -21,7 +21,8 @@
 14. [Database Resilience & Migration Discipline](#14-database-resilience--migration-discipline)
 15. [SMS Capture & Auto-Suggestions (Android)](#15-sms-capture--auto-suggestions-android)
 16. [Future Scope](#16-future-scope)
-17. [Appendices](#appendices)
+17. [Android Instrumented E2E Testing](#17-android-instrumented-e2e-testing)
+18. [Appendices](#appendices)
     - [Appendix A: INR Formatting Utility](#appendix-a-inr-formatting-utility)
     - [Appendix B: Score Calculation Function](#appendix-b-score-calculation-function)
     - [Appendix C: Spend Categories](#appendix-c-spend-categories)
@@ -32,6 +33,7 @@
     - [Appendix H: App Metadata & Branding](#appendix-h-app-metadata--branding)
     - [Appendix I: Reset & Data Wipe Behaviour](#appendix-i-reset--data-wipe-behaviour)
     - [Appendix J: Migration Strategy](#appendix-j-migration-strategy)
+    - [Appendix K: E2E Test Matrix](#appendix-k-e2e-test-matrix)
 
 ---
 
@@ -1253,6 +1255,239 @@ These are NOT in v1.0 but are worth architectural consideration:
 
 ---
 
+## 17. Android Instrumented E2E Testing
+
+> **The release gate that proves the app works as a user would use it — on a real (emulated) Android device, end-to-end, before any build ships.**
+
+amban.io is local-only: there is no server to mock, no API to stub, and no cloud to replay. The only way to know it works is to drive the actual compiled app on an actual Android runtime. This section defines the instrumented test strategy that must be green before any release tag is cut.
+
+### 17.1 Goals
+
+1. **Every user-facing flow** defined in §6 is exercised end-to-end on an emulated Android device.
+2. **Every edge case** in §13 has at least one instrumented test proving the specified behaviour.
+3. **Every Capacitor plugin integration** (SQLite, Preferences, Local Notifications, Haptics, SMS Reader) is exercised through the real native binding — not web mocks.
+4. **Every database migration** is verified on the native SQLite binding via the §14.8 upgrade matrix, promoted from a script to a proper instrumented test suite.
+5. **Regression-proof.** No release ships without this suite green on CI. A red test blocks the tag.
+
+### 17.2 Tech Stack
+
+| Layer | Choice | Notes |
+|---|---|---|
+| Test framework | Android Instrumented Tests (AndroidJUnit4) | Runs on-device / on-emulator via `connectedAndroidTest` Gradle task |
+| UI automation | Espresso + Espresso-Web | Espresso-Web drives the Capacitor WebView; Espresso handles native dialogs (permission prompts, system UI) |
+| Emulator | Android Emulator (API 30 minimum, API 34 recommended) | Managed via AVD or GitHub Actions `reactivecircus/android-emulator-runner` |
+| Assertions | JUnit 4 + Hamcrest | Standard Android test assertions |
+| Screenshot diffing | *(Future — v0.3)* | Not in v0.2; visual regression is manual for now |
+| CI runner | GitHub Actions (`ubuntu-latest` + hardware-accelerated emulator) | KVM-enabled runner for acceptable emulator speed |
+
+### 17.3 Emulator Configuration
+
+```
+Device profile:   Pixel 6 (1080×2400, 411 dpi)
+System image:     system-images;android-34;google_apis;x86_64
+RAM:              4096 MB
+Heap:             512 MB
+Internal storage: 4 GB
+SD card:          512 MB (SMS content provider needs writable storage)
+Locale:           en-IN
+Timezone:         Asia/Kolkata
+GPU:              host (CI: swiftshader_indirect)
+```
+
+A second emulator profile targets the minimum supported API (API 23, Android 6.0) to verify backward compatibility — run on a nightly schedule, not on every PR.
+
+### 17.4 Test Suite Organisation
+
+```
+android/app/src/androidTest/java/io/amban/app/
+├── e2e/
+│   ├── OnboardingFlowTest.java        // §6.1 full onboarding
+│   ├── DailyUseFlowTest.java          // §6.2 morning open → log → updated score
+│   ├── BalanceUpdateFlowTest.java      // §6.3 balance correction
+│   ├── IncomeCreditFlowTest.java       // §6.4 salary-day banner + prefill
+│   ├── RecurringPaymentFlowTest.java   // §6.5 upcoming warning display
+│   ├── ManualCreditFlowTest.java       // §6.6 burst income
+│   ├── SmsCaptureFlowTest.java         // §15 permission → scan → accept → dismiss
+│   └── ResetAppFlowTest.java           // Appendix I wipe + re-onboarding
+├── scoring/
+│   ├── AmbanScoreTest.java            // §8.1 formula on native binding
+│   ├── ScoreEdgeCasesTest.java        // §13.1–13.8 all edge cases
+│   └── ScoreRecalcTriggersTest.java   // §8.3 recalc on log/balance/income/recurring
+├── db/
+│   ├── FreshInstallMigrationTest.java  // §14.8 check 1: empty → latest
+│   ├── UpgradeMatrixTest.java          // §14.8 check 2: each prior version → latest
+│   ├── CatalogueDriftTest.java         // §14.8 check 3: catalogue == disk
+│   ├── CommentHeavySqlTest.java        // §14.8 check 4: regression
+│   └── BackupRoundTripTest.java        // §14.8 check 5: backup/restore
+├── notifications/
+│   ├── NotificationScheduleTest.java  // Appendix E ID ranges, daily/recurring/salary
+│   ├── PermissionFlowTest.java        // Android 13+ POST_NOTIFICATIONS
+│   └── DeepLinkTest.java              // amban://log routes to Daily Log
+├── sms/
+│   ├── SmsReaderPluginTest.java       // Native plugin: permission + read
+│   ├── SmsParserAccuracyTest.java     // Parser fixtures on native runtime
+│   └── SmsSuggestionLifecycleTest.java // pending → accepted/dismissed lifecycle
+├── settings/
+│   ├── ThemeToggleTest.java           // Light/Dark/System + status bar
+│   ├── ExportDataTest.java            // JSON export content verification
+│   └── PrivacyZeroNetworkTest.java    // Assert zero outbound network during full flow
+└── helpers/
+    ├── WebViewHelper.java             // Espresso-Web utilities for Capacitor WebView
+    ├── DbSeeder.java                  // Seed SQLite with known state for each prior version
+    └── EmulatorSmsInjector.java       // Insert SMS into Telephony provider for parser tests
+```
+
+### 17.5 Key Test Scenarios
+
+#### Onboarding E2E (§6.1)
+1. Cold launch on wiped emulator → Welcome screen renders.
+2. Enter name → proceeds to Income step.
+3. Add one income source (label, amount, credit day) → BankBalance step enabled.
+4. Enter bank balance → RecurringPayments step.
+5. Skip recurring payments → Notification setup.
+6. Set notification time → Onboarding Complete screen.
+7. Score card displays a non-zero ₹/day number.
+8. Navigate to Home → all sections render without crash.
+9. Kill the app, relaunch → Home (not Welcome) renders.
+
+#### Daily Log + Score Recalc (§6.2, §8.3)
+1. Seed: onboarded user with known balance, income, recurring.
+2. Open Home → capture displayed score.
+3. Navigate to Log → enter ₹1,000 → save.
+4. Assert: score decreases by approximately `₹1,000 / daysLeft`.
+5. Assert: `daily_logs` table has one row with today's date.
+6. Assert: post-save toast matches the tone rule (under/over/on-target).
+
+#### SMS Capture (§15)
+1. Inject sample HDFC debit SMS into the emulator's Telephony provider.
+2. Grant `READ_SMS` permission via Espresso's `GrantPermissionRule` or UiAutomator.
+3. Enable SMS Capture in Settings → trigger scan.
+4. Assert: suggestion inbox shows the injected SMS with correct amount/direction.
+5. Tap "Add as spend" → Daily Log opens prefilled.
+6. Save → assert `sms_suggestions.status = 'accepted'` and `linked_log_id` populated.
+7. Dismiss a second suggestion → assert it never reappears.
+
+#### Edge Case: Negative Balance (§13.5)
+1. Seed: balance ₹5,000, recurring ₹20,000 due before next income.
+2. Assert: score displays ₹0 (clamped, never negative).
+3. Assert: red warning banner visible on Home.
+
+#### Edge Case: No Log for Multiple Days (§13.6)
+1. Seed: last log 4 days ago.
+2. Assert: stale-logs nudge visible on Home.
+3. Tap "Log missed days" → backfill sheet opens with date picker.
+
+#### Zero Network Assertion
+1. Set emulator to airplane mode (or use `adb shell svc wifi disable` + `svc data disable`).
+2. Run the *entire* onboarding + daily log + insights + settings + export flow.
+3. Assert: no step fails due to network. No `java.net.UnknownHostException` or `ERR_INTERNET_DISCONNECTED` in logcat.
+
+### 17.6 SMS Injection for Tests
+
+Instrumented tests cannot rely on real SMS being present. The emulator's Telephony content provider is writable:
+
+```java
+// helpers/EmulatorSmsInjector.java
+ContentValues values = new ContentValues();
+values.put(Telephony.Sms.ADDRESS, "HDFCBK");
+values.put(Telephony.Sms.BODY,
+    "INR 420.00 debited from a/c **1234 on 15-01-25 to SWIGGY. Ref 501234567890. Avl bal INR 38,030.00");
+values.put(Telephony.Sms.DATE, System.currentTimeMillis());
+values.put(Telephony.Sms.TYPE, Telephony.Sms.MESSAGE_TYPE_INBOX);
+values.put(Telephony.Sms.READ, 0);
+
+context.getContentResolver().insert(Telephony.Sms.CONTENT_URI, values);
+```
+
+A fixture set of 20+ anonymised SMS bodies covering HDFC, ICICI, SBI, Axis, GPay, PhonePe, and Paytm lives in `android/app/src/androidTest/assets/sms_fixtures.json`. Each fixture specifies the `sender`, `body`, and expected parse result (`amount`, `direction`, `counterparty`, `confidence`).
+
+### 17.7 CI Integration
+
+```yaml
+# .github/workflows/e2e-android.yml (outline)
+name: Android E2E
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  instrumented-tests:
+    runs-on: ubuntu-latest          # must have KVM for emulator
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 17 }
+      - uses: actions/setup-node@v4
+        with: { node-version-file: .nvmrc }
+      - run: npm ci
+      - run: npm run build
+      - run: npx cap sync android
+      - uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          ram-size: 4096M
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          script: |
+            cd android && ./gradlew connectedAndroidTest --stacktrace
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-reports
+          path: android/app/build/reports/androidTests/
+```
+
+**Release gate rule:** The `e2e-android` workflow must be green before `git tag`. The release workflow refuses to run if the latest E2E run on the same commit SHA is not green.
+
+### 17.8 Nightly Extended Matrix
+
+Beyond the per-PR suite, a nightly GitHub Actions cron job runs the full suite against:
+
+| API Level | Profile | Purpose |
+|---|---|---|
+| 23 (Android 6.0) | Nexus 5 | Minimum supported API |
+| 28 (Android 9) | Pixel 3 | Pre-notification-channel baseline |
+| 30 (Android 11) | Pixel 4 | Scoped storage boundary |
+| 33 (Android 13) | Pixel 6 | `POST_NOTIFICATIONS` runtime permission boundary |
+| 34 (Android 14) | Pixel 7 | Latest stable |
+
+Failures on the nightly matrix create a GitHub issue tagged `e2e-nightly-failure` with the emulator profile, failing test, and logcat excerpt attached.
+
+### 17.9 Local Development Workflow
+
+```bash
+# Start the emulator
+emulator -avd Pixel_6_API_34 -no-snapshot -gpu host
+
+# Build the web layer, sync into native project
+npm run build && npx cap sync android
+
+# Run the full instrumented suite
+cd android && ./gradlew connectedAndroidTest
+
+# Run a single test class
+./gradlew connectedAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=io.amban.app.e2e.OnboardingFlowTest
+
+# Run tests matching a pattern
+./gradlew connectedAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=io.amban.app.sms.SmsReaderPluginTest
+```
+
+Test results land in `android/app/build/reports/androidTests/connected/` — HTML report auto-opens on failure.
+
+### 17.10 Test Data Discipline
+
+- **No hardcoded dates.** Every test that involves date arithmetic accepts `today` as a parameter or uses a clock abstraction.
+- **Isolated state per test.** Each test class wipes the DB and Preferences in `@Before`. No test depends on another test's side effects.
+- **Fixture files over inline data.** SMS fixtures, migration SQL snapshots, and seeded DB states live in `androidTest/assets/` — never inline in Java.
+- **Deterministic amounts.** Use coprime amounts (₹1,111, ₹2,222, ₹3,333) so assertions can distinguish which entry produced which number without ambiguity.
+
+---
+
 ## Appendix A: INR Formatting Utility
 
 ```typescript
@@ -1480,6 +1715,51 @@ Even in v1, migrations must be first-class — users will be on the app for mont
 - On app start: read current `schema_version`, apply all pending migrations in order inside a single transaction, then update the version.
 - Never edit a shipped migration file — always add a new one.
 - If a migration fails: roll back, log locally, and show a non-dismissable error screen with a "Reset App" escape hatch. (No remote recovery possible — this is a local-only app.)
+
+---
+
+## Appendix K: E2E Test Matrix
+
+The canonical test matrix for the §17 instrumented suite. Every row must be green before a release tag.
+
+| # | Flow / Edge Case | Spec Ref | Test Class | Asserts |
+|---|---|---|---|---|
+| 1 | Fresh onboarding: name → income → balance → recurring → notifications → score | §6.1 | `OnboardingFlowTest` | Score > 0, Home renders, relaunch stays on Home |
+| 2 | Onboarding resume after kill mid-flow | §13.8 | `OnboardingFlowTest` | Resumes at last incomplete step |
+| 3 | Daily spend log reduces score | §6.2, §8.3 | `DailyUseFlowTest` | Score delta ≈ spend/daysLeft |
+| 4 | Quick-amount chips are additive | §9.2 | `DailyUseFlowTest` | Tapping ₹500 twice = ₹1,000 |
+| 5 | Backfill missed days | §13.6 | `DailyUseFlowTest` | N rows in daily_logs, stale-logs warning clears |
+| 6 | Balance update recalculates score | §6.3, §8.3 | `BalanceUpdateFlowTest` | Score changes, new snapshot row |
+| 7 | Salary-day banner + prefilled balance update | §6.4 | `IncomeCreditFlowTest` | Banner visible on credit day, balance prefilled |
+| 8 | Upcoming recurring payment chip strip | §6.5 | `RecurringPaymentFlowTest` | Chip visible within WARN_DAYS |
+| 9 | Burst income adds to effective balance | §6.6 | `ManualCreditFlowTest` | Score increases, manual_credits row inserted |
+| 10 | Score ≥ 90% avg → green status | §8.2 | `AmbanScoreTest` | Status = "healthy" |
+| 11 | Score 60–89% avg → amber status | §8.2 | `AmbanScoreTest` | Status = "watch" |
+| 12 | Score < 60% avg → red status | §8.2 | `AmbanScoreTest` | Status = "critical" |
+| 13 | First day (no logs) → green, insights hidden | §13.1 | `ScoreEdgeCasesTest` | Green status, log-dependent insights absent |
+| 14 | Income day = today → daysLeft = next month's cycle | §13.2 | `ScoreEdgeCasesTest` | daysLeft ≈ 28–31 |
+| 15 | Multiple income sources → earliest next date wins | §13.3 | `ScoreEdgeCasesTest` | daysLeft uses soonest source |
+| 16 | Recurring due day 31 in a 30-day month → clamped | §13.4 | `ScoreEdgeCasesTest` | Due date = last day of month |
+| 17 | Negative effective balance → score clamped at ₹0 | §13.5 | `ScoreEdgeCasesTest` | Score = 0, red warning banner |
+| 18 | Recurring already paid → not double-deducted | §13.7 | `ScoreEdgeCasesTest` | Recurring not in upcomingRecurring |
+| 19 | Fresh install migration (empty → latest) | §14.8.1 | `FreshInstallMigrationTest` | Schema version = latest |
+| 20 | Upgrade from each prior version | §14.8.2 | `UpgradeMatrixTest` | All rows survive, version advances |
+| 21 | Migration catalogue matches disk | §14.8.3 | `CatalogueDriftTest` | No orphaned files or catalogue entries |
+| 22 | Comment-heavy SQL migration | §14.8.4 | `CommentHeavySqlTest` | Migration 002 applies on native binding |
+| 23 | Backup → corrupt → restore round-trip | §14.8.5 | `BackupRoundTripTest` | All rows intact after restore |
+| 24 | SMS permission grant + scan | §15.3, §15.4 | `SmsCaptureFlowTest` | Permission granted, suggestions populated |
+| 25 | SMS suggestion accept as spend | §15.6 | `SmsSuggestionLifecycleTest` | status=accepted, linked_log_id set |
+| 26 | SMS suggestion accept as income | §15.6 | `SmsSuggestionLifecycleTest` | status=accepted, linked_credit_id set |
+| 27 | SMS suggestion dismiss → never re-surfaces | §15.6 | `SmsSuggestionLifecycleTest` | status=dismissed, not in pending |
+| 28 | SMS parser accuracy ≥ 90% on fixture set | §15.5 | `SmsParserAccuracyTest` | ≥ 18/20 fixtures parsed correctly |
+| 29 | Notification daily prompt scheduled | §10.1 | `NotificationScheduleTest` | id=1000 present in pending |
+| 30 | Notification deep-link → /log | §10.1 | `DeepLinkTest` | DailyLogScreen renders |
+| 31 | POST_NOTIFICATIONS runtime permission (API 33+) | §10, Phase 21 | `PermissionFlowTest` | Permission dialog appears, grant works |
+| 32 | Theme toggle: light/dark/system | §9.5 | `ThemeToggleTest` | data-theme attribute correct |
+| 33 | Export data produces valid JSON | §13, Phase 13 | `ExportDataTest` | JSON parses, contains expected keys |
+| 34 | Zero network during complete flow | §12 | `PrivacyZeroNetworkTest` | No outbound connections in logcat |
+| 35 | Reset App → full wipe → re-onboarding | Appendix I | `ResetAppFlowTest` | All tables empty, Welcome screen |
+| 36 | All 9 insight generators produce output with valid seed data | §11 | `InsightsScreen` (manual / future) | Each insight type observable |
 
 ---
 
