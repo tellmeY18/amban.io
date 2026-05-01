@@ -76,6 +76,7 @@ export interface RecurringPayment {
   /** Category key from Appendix C — stable enum, never renamed. */
   category: CategoryKey;
   isActive: boolean;
+  lastPaidDate: string | null;
 }
 
 export interface BalanceSnapshot {
@@ -139,6 +140,9 @@ export interface FinanceActions {
   deleteRecurringPayment: (id: number) => Promise<void>;
   toggleRecurringPayment: (id: number) => Promise<void>;
 
+  /** Record that a recurring payment has been paid for the current cycle. */
+  markRecurringAsPaid: (id: number) => Promise<void>;
+
   /** One-off income credits. */
   addManualCredit: (credit: Omit<ManualCredit, "id">) => Promise<ManualCredit>;
   deleteManualCredit: (id: number) => Promise<void>;
@@ -179,6 +183,7 @@ function toRecurringPayment(record: RecurringPaymentRecord): RecurringPayment {
     dueDay: record.dueDay,
     category: record.category,
     isActive: record.isActive,
+    lastPaidDate: record.lastPaidDate,
   };
 }
 
@@ -359,6 +364,13 @@ export const useFinanceStore = create<FinanceStore>((set) => ({
 
   toggleRecurringPayment: async (id) => {
     await recurringPaymentsRepo.toggleActive(id);
+    const recurringPayments = await refreshRecurringPayments();
+    set((prev) => ({ ...prev, recurringPayments }));
+  },
+
+  markRecurringAsPaid: async (id) => {
+    const todayIso = new Date().toISOString().slice(0, 10);
+    await recurringPaymentsRepo.markAsPaid(id, todayIso);
     const recurringPayments = await refreshRecurringPayments();
     set((prev) => ({ ...prev, recurringPayments }));
   },

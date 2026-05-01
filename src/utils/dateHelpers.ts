@@ -176,3 +176,44 @@ export function today(): Date {
 export function isSameCalendarDay(a: Date, b: Date): boolean {
   return differenceInCalendarDays(a, b) === 0;
 }
+
+/* ------------------------------------------------------------------
+ * Paid-this-cycle helper
+ * ------------------------------------------------------------------ */
+
+/** Format a Date as YYYY-MM-DD in the device's local timezone. */
+function toLocalIsoDate(date: Date): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+/**
+ * True when a recurring payment has already been marked as paid for
+ * the billing cycle that contains `currentDueDate`. A payment is
+ * considered "paid this cycle" if its `lastPaidDate` falls after the
+ * *previous* occurrence of the same due day — i.e. the user paid it
+ * sometime between last month's due date and this month's.
+ *
+ * Used by UpcomingPayments (to hide paid chips) and useAmbanScore
+ * (to exclude paid bills from the pre-deduction).
+ */
+export function isPaidThisCycle(lastPaidDate: string | null, dueDay: number, today: Date): boolean {
+  if (!lastPaidDate) return false;
+
+  // The previous cycle's due date (last month, clamped).
+  const prevMonthRef = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+  const prevDue = getActualDueDate(dueDay, prevMonthRef);
+
+  // If the due date hasn't arrived yet this month, the window is
+  // (prevDue, currentDue]. If it has passed, the current cycle is
+  // already over and the next one starts — but UpcomingPayments
+  // would have rolled forward to next month anyway, so this branch
+  // handles the "paid early" case.
+  const paidIso = lastPaidDate.slice(0, 10); // normalise to YYYY-MM-DD
+  const prevDueIso = toLocalIsoDate(prevDue);
+
+  // Paid strictly after the previous due date → covers the current cycle.
+  return paidIso > prevDueIso;
+}

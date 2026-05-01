@@ -36,6 +36,7 @@ import migration001 from "./001_init.sql?raw";
 import migration002 from "./002_spend_entries.sql?raw";
 import migration003 from "./003_schema_migrations.sql?raw";
 import migration004 from "./004_sms_suggestions.sql?raw";
+import migration005 from "./005_recurring_last_paid.sql?raw";
 
 /**
  * Shape of a single catalogue entry. Consumed by the runner in db.ts
@@ -84,6 +85,12 @@ export const MIGRATION_CATALOG: ReadonlyArray<MigrationEntry> = [
     name: "sms_suggestions",
     sql: migration004,
     checksum: computeChecksum(normaliseSQL(migration004)),
+  },
+  {
+    version: 5,
+    name: "recurring_last_paid",
+    sql: migration005,
+    checksum: computeChecksum(normaliseSQL(migration005)),
   },
 ];
 

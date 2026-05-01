@@ -147,6 +147,7 @@ const EditSheet: React.FC<{
         dueDay: Number(draft.dueDay),
         category: draft.category,
         isActive: draft.isActive,
+        lastPaidDate: null,
       });
       onDismiss();
     } catch (e) {
@@ -337,6 +338,7 @@ const MarkPaidSheet: React.FC<{
 }> = ({ open, payment, onDismiss }) => {
   const latestBalance = useFinanceStore((s) => s.latestBalance);
   const setBalance = useFinanceStore((s) => s.setBalance);
+  const markAsPaid = useFinanceStore((s) => s.markRecurringAsPaid);
   const prefill = Math.max(0, (latestBalance?.amount ?? 0) - (payment?.amount ?? 0));
   const [draft, setDraft] = useState<number | null>(prefill);
   const [busy, setBusy] = useState(false);
@@ -350,6 +352,7 @@ const MarkPaidSheet: React.FC<{
     setBusy(true);
     try {
       await setBalance(draft);
+      if (payment) await markAsPaid(payment.id);
       void haptics.tapMedium();
       onDismiss();
     } finally {

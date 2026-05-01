@@ -45,7 +45,7 @@ import {
   SCORE_GOOD_RATIO,
   SCORE_HEALTHY_RATIO,
 } from "../constants/insightThresholds";
-import { today as todayStartOfDay } from "../utils/dateHelpers";
+import { isPaidThisCycle, today as todayStartOfDay } from "../utils/dateHelpers";
 import { calculateAmbanScore } from "../utils/scoring";
 import type { ScoreResult } from "../utils/scoring";
 import { useDailyStore } from "../stores/dailyStore";
@@ -326,7 +326,9 @@ export function useAmbanScore(): AmbanScoreResult {
     // Filter down to active rows here so every downstream calc treats
     // soft-deleted entries as non-existent.
     const activeIncome = incomeSources.filter((s) => s.isActive);
-    const activeRecurring = recurringPayments.filter((p) => p.isActive);
+    const activeRecurring = recurringPayments.filter(
+      (p) => p.isActive && !isPaidThisCycle(p.lastPaidDate, p.dueDay, today),
+    );
 
     // Resolve the effective balance inputs. The snapshot date bounds
     // both the spend and the credit windows — everything on or after

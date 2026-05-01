@@ -30,7 +30,11 @@ import { CATEGORY_BY_KEY } from "../../../constants/categories";
 import { UPCOMING_PAYMENT_WARN_DAYS } from "../../../constants/insightThresholds";
 import { CATEGORY_ICONS } from "../../../theme/icons";
 import { formatINR } from "../../../utils/formatters";
-import { getActualDueDate, today as todayStartOfDay } from "../../../utils/dateHelpers";
+import {
+  getActualDueDate,
+  isPaidThisCycle,
+  today as todayStartOfDay,
+} from "../../../utils/dateHelpers";
 
 /** How far out to surface payments on Home. Mirrors §9.1's 7-day rule. */
 const HORIZON_DAYS = 7;
@@ -70,6 +74,7 @@ const UpcomingPayments: React.FC = () => {
     const out: UpcomingEntry[] = [];
     for (const payment of recurring) {
       if (!payment.isActive) continue;
+      if (isPaidThisCycle(payment.lastPaidDate, payment.dueDay, today)) continue;
       const dueDate = nextDueDate(payment, today);
       const daysUntil = differenceInCalendarDays(dueDate, today);
       if (daysUntil < 0 || daysUntil > HORIZON_DAYS) continue;

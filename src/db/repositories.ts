@@ -490,6 +490,7 @@ export interface RecurringPaymentRecord {
   dueDay: number;
   category: CategoryKey;
   isActive: boolean;
+  lastPaidDate: string | null;
 }
 
 interface RecurringPaymentRow {
@@ -499,6 +500,7 @@ interface RecurringPaymentRow {
   due_day: number;
   category: string;
   is_active: number;
+  last_paid_date: string | null;
 }
 
 function mapRecurringPayment(row: RecurringPaymentRow): RecurringPaymentRecord {
@@ -513,6 +515,7 @@ function mapRecurringPayment(row: RecurringPaymentRow): RecurringPaymentRecord {
     dueDay: row.due_day,
     category,
     isActive: toBool(row.is_active),
+    lastPaidDate: row.last_paid_date ?? null,
   };
 }
 
@@ -570,6 +573,10 @@ export const recurringPaymentsRepo = {
       sets.push("is_active = ?");
       values.push(fromBool(patch.isActive));
     }
+    if (patch.lastPaidDate !== undefined) {
+      sets.push("last_paid_date = ?");
+      values.push(patch.lastPaidDate);
+    }
     if (sets.length === 0) return;
 
     values.push(id);
@@ -587,6 +594,15 @@ export const recurringPaymentsRepo = {
       const res = await db.query("SELECT is_active FROM recurring_payments WHERE id = ?;", [id]);
       const row = rows<{ is_active: number }>(res)[0];
       return toBool(row?.is_active ?? 0);
+    });
+  },
+
+  async markAsPaid(id: number, paidDate: string): Promise<void> {
+    await withDb(async (db) => {
+      await db.run("UPDATE recurring_payments SET last_paid_date = ? WHERE id = ?;", [
+        paidDate,
+        id,
+      ]);
     });
   },
 
