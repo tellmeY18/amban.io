@@ -182,6 +182,7 @@ const RecurringPayments: React.FC = () => {
         dueDay: Number(draft.dueDay),
         category: draft.category,
         isActive: true,
+        lastPaidDate: null,
       });
       setDraft({ ...EMPTY_DRAFT });
     } catch (e) {
