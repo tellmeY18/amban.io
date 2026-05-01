@@ -50,6 +50,7 @@ import ManageIncome from "./screens/Settings/ManageIncome";
 import ManageRecurring from "./screens/Settings/ManageRecurring";
 import NotificationSettings from "./screens/Settings/NotificationSettings";
 import PrivacyStatement from "./screens/Settings/PrivacyStatement";
+import SmsCapture from "./screens/Settings/SmsCapture";
 import OnboardingStack from "./screens/Onboarding/OnboardingStack";
 import StyleGuideScreen from "./screens/StyleGuide/StyleGuideScreen";
 
@@ -192,6 +193,7 @@ const AuthenticatedRoutes: React.FC = () => (
         <Route exact path="/settings/income" component={ManageIncome} />
         <Route exact path="/settings/recurring" component={ManageRecurring} />
         <Route exact path="/settings/notifications" component={NotificationSettings} />
+        <Route exact path="/settings/sms-capture" component={SmsCapture} />
         <Route exact path="/settings/privacy" component={PrivacyStatement} />
         {IS_DEV ? <Route exact path="/styleguide" component={StyleGuideScreen} /> : null}
         <Route exact path="/">

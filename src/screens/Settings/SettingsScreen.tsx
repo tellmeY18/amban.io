@@ -22,9 +22,10 @@
  *     just wires the UI around it.
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useHistory } from "react-router-dom";
 import { IonContent, IonIcon, IonPage } from "@ionic/react";
+import { Capacitor } from "@capacitor/core";
 
 import BottomSheet from "../../components/ui/BottomSheet";
 import CurrencyInput from "../../components/ui/CurrencyInput";
@@ -40,6 +41,7 @@ import { Icons } from "../../theme/icons";
 import { useTheme } from "../../theme/ThemeProvider";
 import { formatINR, formatTime12h } from "../../utils/formatters";
 import { haptics } from "../../utils/haptics";
+import { useAmbanScore } from "../../hooks/useAmbanScore";
 import { BUILD_INFO, formatBuildLabel } from "../../constants/buildInfo";
 import { exportAndOffer } from "../../utils/exportData";
 
@@ -161,11 +163,25 @@ const SectionHeader: React.FC<{ children: React.ReactNode }> = ({ children }) =>
 const BalanceUpdateSheet: React.FC<{
   open: boolean;
   onDismiss: () => void;
-}> = ({ open, onDismiss }) => {
+  effectiveBalance?: number | null;
+}> = ({ open, onDismiss, effectiveBalance }) => {
   const latestBalance = useFinanceStore((s) => s.latestBalance);
   const setBalance = useFinanceStore((s) => s.setBalance);
-  const [draft, setDraft] = useState<number | null>(latestBalance?.amount ?? null);
+  const [draft, setDraft] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
+
+  // Reset draft to the effective balance every time the sheet opens
+  // so the user always sees the up-to-date number — not a stale
+  // value from the last time useState initialised.
+  useEffect(() => {
+    if (open) {
+      const best =
+        effectiveBalance != null
+          ? Math.max(0, Math.round(effectiveBalance))
+          : (latestBalance?.amount ?? null);
+      setDraft(best);
+    }
+  }, [open, effectiveBalance, latestBalance]);
 
   const handleSave = async () => {
     if (draft == null || busy) return;
@@ -182,15 +198,24 @@ const BalanceUpdateSheet: React.FC<{
   return (
     <BottomSheet open={open} onDismiss={onDismiss} title="Update balance" initialBreakpoint={0.5}>
       {latestBalance ? (
-        <p
+        <div
           style={{
             margin: 0,
             fontSize: "var(--text-caption)",
             color: "var(--text-muted)",
           }}
         >
-          Last recorded: {formatINR(latestBalance.amount)} on {latestBalance.recordedAt}.
-        </p>
+          <p style={{ margin: 0 }}>
+            Last recorded: {formatINR(latestBalance.amount)} on {latestBalance.recordedAt}.
+          </p>
+          {effectiveBalance != null &&
+            Math.round(effectiveBalance) !== Math.round(latestBalance.amount) && (
+              <p style={{ margin: "var(--space-xs) 0 0" }}>
+                Effective balance (after spend &amp; credits):{" "}
+                {formatINR(Math.max(0, Math.round(effectiveBalance)))}.
+              </p>
+            )}
+        </div>
       ) : (
         <p
           style={{
@@ -542,6 +567,8 @@ const SettingsScreen: React.FC = () => {
   const setStoredTheme = useSettingsStore((s) => s.setTheme);
   const { setTheme: applyTheme } = useTheme();
 
+  const score = useAmbanScore();
+
   const [balanceOpen, setBalanceOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const [resetOpen, setResetOpen] = useState(false);
@@ -602,7 +629,13 @@ const SettingsScreen: React.FC = () => {
           <SettingsRow
             icon={Icons.finance.wallet}
             label="Update balance"
-            value={latestBalance ? formatINR(latestBalance.amount) : "Not set"}
+            value={
+              score.ready
+                ? formatINR(Math.max(0, Math.round(score.effectiveBalance)))
+                : latestBalance
+                  ? formatINR(latestBalance.amount)
+                  : "Not set"
+            }
             onSelect={() => setBalanceOpen(true)}
           />
           <SettingsRow
@@ -625,6 +658,14 @@ const SettingsScreen: React.FC = () => {
             value={notificationsEnabled ? formatTime12h(notificationTime) : "Off"}
             onSelect={() => history.push("/settings/notifications")}
           />
+          {Capacitor.getPlatform() === "android" ? (
+            <SettingsRow
+              icon={Icons.action.add}
+              label="SMS Capture"
+              value="Connected Sources"
+              onSelect={() => history.push("/settings/sms-capture")}
+            />
+          ) : null}
           <SettingsRow
             icon={Icons.action.forward}
             label="Export data"
@@ -763,7 +804,11 @@ const SettingsScreen: React.FC = () => {
           </footer>
         </main>
 
-        <BalanceUpdateSheet open={balanceOpen} onDismiss={() => setBalanceOpen(false)} />
+        <BalanceUpdateSheet
+          open={balanceOpen}
+          onDismiss={() => setBalanceOpen(false)}
+          effectiveBalance={score.ready ? score.effectiveBalance : null}
+        />
         <ProfileSheet open={profileOpen} onDismiss={() => setProfileOpen(false)} />
         <ResetSheet open={resetOpen} onDismiss={() => setResetOpen(false)} />
       </IonContent>

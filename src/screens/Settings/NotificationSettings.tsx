@@ -10,6 +10,15 @@
  *     12h with AM/PM per Indian UX convention).
  *   - Surfaces the current OS permission state and offers a "fix it"
  *     affordance when permission is denied but the toggle is on.
+ *   - OEM battery-saver card: detects aggressive OEMs (Xiaomi, OPPO,
+ *     Samsung, etc.) and surfaces a one-time, dismissable card
+ *     directing the user to the right battery settings.
+ *   - Permission re-ask banner: when notifications are enabled in
+ *     settings but the OS permission is denied (upgrading users from
+ *     pre-v0.2.0), shows a prominent "Grant permission" CTA.
+ *   - Dev-only diagnostics section (behind `import.meta.env.DEV`):
+ *     test-fire button, schedule verification status, force
+ *     reschedule, and error display.
  *   - Changing any setting triggers a scheduler re-run via the
  *     `useNotifications` hook — off cancels every scheduled ID,
  *     on + new time reschedules the daily prompt at the new minute.
@@ -26,9 +35,11 @@
  *     is reversible, and adding a modal to a binary switch is noise.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useHistory } from "react-router-dom";
 import { IonContent, IonIcon, IonPage } from "@ionic/react";
+
+import { Preferences } from "@capacitor/preferences";
 
 import { useSettingsStore } from "../../stores/settingsStore";
 import { useNotifications } from "../../hooks/useNotifications";
@@ -36,6 +47,11 @@ import { useNotifications } from "../../hooks/useNotifications";
 import { Icons } from "../../theme/icons";
 import { formatTime12h } from "../../utils/formatters";
 import { haptics } from "../../utils/haptics";
+import { detectOem } from "../../utils/oemBatterySaver";
+import type { OemInfo } from "../../utils/oemBatterySaver";
+
+/** Preferences key for persisting the OEM battery card dismissal. */
+const OEM_CARD_DISMISSED_KEY = "amban.oem_battery_card_dismissed";
 
 /**
  * Normalise an arbitrary input-value into the canonical HH:MM form the
@@ -83,18 +99,48 @@ const NotificationSettings: React.FC = () => {
   const setNotificationsEnabled = useSettingsStore((s) => s.setNotificationsEnabled);
   const setNotificationTime = useSettingsStore((s) => s.setNotificationTime);
 
-  const { permission, requestPermission, rescheduleAll, cancelAll, openSystemSettings } =
-    useNotifications();
+  const {
+    permission,
+    requestPermission,
+    rescheduleAll,
+    forceRescheduleAll,
+    cancelAll,
+    openSystemSettings,
+    lastScheduleVerified,
+    scheduledCount,
+    testFireNotification,
+    lastError: hookError,
+  } = useNotifications();
 
   // Local draft so the time input feels responsive (the store write is
   // async). On blur / commit we flush to the store and reschedule.
   const [draftTime, setDraftTime] = useState(notificationTime);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [oemDismissed, setOemDismissed] = useState(true); // default hidden until loaded
+  const [testFired, setTestFired] = useState(false);
 
   useEffect(() => {
     setDraftTime(notificationTime);
   }, [notificationTime]);
+
+  // Load OEM card dismissal state from Preferences.
+  useEffect(() => {
+    void (async () => {
+      const { value } = await Preferences.get({ key: OEM_CARD_DISMISSED_KEY });
+      setOemDismissed(value === "1");
+    })();
+  }, []);
+
+  const oemInfo: OemInfo = useMemo(() => detectOem(), []);
+
+  const showOemCard = oemInfo.isAggressiveOem && !oemDismissed;
+
+  const handleDismissOemCard = async () => {
+    setOemDismissed(true);
+    await Preferences.set({ key: OEM_CARD_DISMISSED_KEY, value: "1" });
+    void haptics.selection();
+  };
 
   const permissionDenied = permission === "denied";
   const permissionPrompt = permission === "prompt" || permission === "unknown";
@@ -199,7 +245,7 @@ const NotificationSettings: React.FC = () => {
             </h1>
           </header>
 
-          {/* Permission-denied banner */}
+          {/* Permission-denied banner — prominent CTA for upgrading users */}
           {notificationsEnabled && permissionDenied ? (
             <article
               role="status"
@@ -220,7 +266,7 @@ const NotificationSettings: React.FC = () => {
                   color: "var(--text-strong)",
                 }}
               >
-                Notifications are blocked by iOS/Android
+                Notifications are enabled but permission is denied
               </span>
               <span
                 style={{
@@ -229,7 +275,113 @@ const NotificationSettings: React.FC = () => {
                   lineHeight: "var(--line-height-body)",
                 }}
               >
-                amban can't prompt you until you enable notifications in system settings.
+                Your device hasn’t granted notification permission yet. amban can’t prompt you until
+                you allow it.
+              </span>
+              <div
+                style={{ display: "flex", gap: "var(--space-sm)", marginTop: "var(--space-xs)" }}
+              >
+                <button
+                  type="button"
+                  onClick={() => {
+                    void requestPermission();
+                  }}
+                  style={{
+                    minHeight: 36,
+                    padding: "var(--space-xs) var(--space-md)",
+                    borderRadius: "var(--radius-md)",
+                    backgroundColor: "var(--color-primary)",
+                    color: "#ffffff",
+                    border: "none",
+                    fontSize: "var(--text-caption)",
+                    fontWeight: "var(--font-weight-semibold)",
+                    cursor: "pointer",
+                  }}
+                >
+                  Grant permission
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void openSystemSettings();
+                  }}
+                  style={{
+                    minHeight: 36,
+                    padding: "var(--space-xs) var(--space-md)",
+                    borderRadius: "var(--radius-md)",
+                    backgroundColor: "transparent",
+                    color: "var(--text-strong)",
+                    border: "1px solid var(--color-divider)",
+                    fontSize: "var(--text-caption)",
+                    fontWeight: "var(--font-weight-semibold)",
+                    cursor: "pointer",
+                  }}
+                >
+                  Open system settings
+                </button>
+              </div>
+            </article>
+          ) : null}
+
+          {/* OEM battery-saver card — dismissable */}
+          {showOemCard ? (
+            <article
+              role="status"
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: "var(--space-xs)",
+                padding: "var(--space-md)",
+                borderRadius: "var(--radius-md)",
+                backgroundColor: "rgba(26, 115, 232, 0.08)",
+                border: "1px solid rgba(26, 115, 232, 0.25)",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "flex-start",
+                  justifyContent: "space-between",
+                }}
+              >
+                <span
+                  style={{
+                    fontSize: "var(--text-body)",
+                    fontWeight: "var(--font-weight-semibold)",
+                    color: "var(--text-strong)",
+                  }}
+                >
+                  Battery optimisation detected
+                </span>
+                <button
+                  type="button"
+                  onClick={() => void handleDismissOemCard()}
+                  aria-label="Dismiss"
+                  style={{
+                    minWidth: 28,
+                    minHeight: 28,
+                    border: "none",
+                    background: "transparent",
+                    cursor: "pointer",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    padding: 0,
+                    color: "var(--text-muted)",
+                  }}
+                >
+                  <IonIcon icon={Icons.action.close} aria-hidden="true" />
+                </button>
+              </div>
+              <span
+                style={{
+                  fontSize: "var(--text-caption)",
+                  color: "var(--text-muted)",
+                  lineHeight: "var(--line-height-body)",
+                }}
+              >
+                Your device ({oemInfo.skinName}) may prevent notifications from arriving on time. To
+                ensure amban can notify you, tap below to adjust your battery settings.
               </span>
               <button
                 type="button"
@@ -242,7 +394,7 @@ const NotificationSettings: React.FC = () => {
                   minHeight: 36,
                   padding: "var(--space-xs) var(--space-md)",
                   borderRadius: "var(--radius-md)",
-                  backgroundColor: "var(--color-score-good)",
+                  backgroundColor: "var(--color-primary)",
                   color: "#ffffff",
                   border: "none",
                   fontSize: "var(--text-caption)",
@@ -250,7 +402,7 @@ const NotificationSettings: React.FC = () => {
                   cursor: "pointer",
                 }}
               >
-                Open system settings
+                Open battery settings
               </button>
             </article>
           ) : null}
@@ -480,6 +632,122 @@ const NotificationSettings: React.FC = () => {
               </div>
             </div>
           </article>
+
+          {/* Dev-only diagnostics */}
+          {import.meta.env.DEV ? (
+            <>
+              <SectionHeader>Diagnostics (dev only)</SectionHeader>
+              <article
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "var(--space-sm)",
+                  padding: "var(--space-md)",
+                  borderRadius: "var(--radius-md)",
+                  backgroundColor: "var(--surface-raised)",
+                  boxShadow: "var(--shadow-card)",
+                }}
+              >
+                {/* Status rows */}
+                <div
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "var(--space-xs)",
+                    fontSize: "var(--text-caption)",
+                    color: "var(--text-muted)",
+                    fontFamily: "monospace",
+                  }}
+                >
+                  <span>
+                    Permission:{" "}
+                    <strong style={{ color: "var(--text-strong)" }}>{permission}</strong>
+                  </span>
+                  <span>
+                    Scheduled:{" "}
+                    <strong style={{ color: "var(--text-strong)" }}>{scheduledCount}</strong>{" "}
+                    notification{scheduledCount !== 1 ? "s" : ""}
+                  </span>
+                  <span>
+                    Verified:{" "}
+                    <strong
+                      style={{
+                        color: lastScheduleVerified
+                          ? "var(--color-score-excellent)"
+                          : "var(--color-score-warning)",
+                      }}
+                    >
+                      {lastScheduleVerified ? "yes" : "NO — daily prompt missing"}
+                    </strong>
+                  </span>
+                  {oemInfo.isAggressiveOem ? (
+                    <span>
+                      OEM:{" "}
+                      <strong style={{ color: "var(--text-strong)" }}>
+                        {oemInfo.manufacturer} ({oemInfo.skinName})
+                      </strong>
+                    </span>
+                  ) : (
+                    <span>OEM: not on aggressive list</span>
+                  )}
+                  {hookError ? (
+                    <span style={{ color: "var(--color-score-warning)" }}>
+                      Last error: {hookError}
+                    </span>
+                  ) : null}
+                </div>
+
+                {/* Action buttons */}
+                <div style={{ display: "flex", gap: "var(--space-sm)", flexWrap: "wrap" }}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setTestFired(true);
+                      void testFireNotification();
+                      void haptics.tapLight();
+                      setTimeout(() => setTestFired(false), 12_000);
+                    }}
+                    disabled={testFired}
+                    style={{
+                      minHeight: 36,
+                      padding: "var(--space-xs) var(--space-md)",
+                      borderRadius: "var(--radius-md)",
+                      backgroundColor: testFired
+                        ? "var(--surface-sunken)"
+                        : "var(--color-score-excellent)",
+                      color: testFired ? "var(--text-muted)" : "#ffffff",
+                      border: "none",
+                      fontSize: "var(--text-caption)",
+                      fontWeight: "var(--font-weight-semibold)",
+                      cursor: testFired ? "not-allowed" : "pointer",
+                    }}
+                  >
+                    {testFired ? "Sent — wait 10s…" : "Send test notification"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void forceRescheduleAll();
+                      void haptics.tapMedium();
+                    }}
+                    style={{
+                      minHeight: 36,
+                      padding: "var(--space-xs) var(--space-md)",
+                      borderRadius: "var(--radius-md)",
+                      backgroundColor: "var(--color-primary)",
+                      color: "#ffffff",
+                      border: "none",
+                      fontSize: "var(--text-caption)",
+                      fontWeight: "var(--font-weight-semibold)",
+                      cursor: "pointer",
+                    }}
+                  >
+                    Force reschedule
+                  </button>
+                </div>
+              </article>
+            </>
+          ) : null}
 
           <p
             style={{

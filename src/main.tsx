@@ -45,7 +45,7 @@ import App from "./App";
 import { BootStage, bootstrapApp } from "./boot";
 import type { BootResult } from "./boot";
 import { resetApp } from "./db/reset";
-import { PreferenceKey } from "./db/preferences";
+import { migrationFlags, PreferenceKey } from "./db/preferences";
 
 /* Self-hosted fonts (no CDN per local-only policy). Loading these at
  * the entry point means every screen — including the boot splash /
@@ -183,10 +183,11 @@ const BootSplash: React.FC = () => (
  * safe to mount because the database itself is in an unknown state.
  * ------------------------------------------------------------------ */
 
-const MigrationFailureScreen: React.FC<{ error: string | null; onRetry: () => void }> = ({
-  error,
-  onRetry,
-}) => {
+const MigrationFailureScreen: React.FC<{
+  error: string | null;
+  onRetry: () => void;
+  restoreBackupAvailable: boolean;
+}> = ({ error, onRetry, restoreBackupAvailable }) => {
   const [working, setWorking] = useState(false);
 
   const handleReset = async () => {
@@ -200,14 +201,38 @@ const MigrationFailureScreen: React.FC<{ error: string | null; onRetry: () => vo
     }
   };
 
+  const handleRestore = async () => {
+    if (working) return;
+    setWorking(true);
+    try {
+      // Clear the migration failure flag so the next boot attempt
+      // doesn't short-circuit to this screen again.
+      await migrationFlags.markSucceeded();
+      // Roll the Preferences schema version back to the backup version
+      // so the runner knows where the DB actually stands. The actual
+      // DB file is at the backup version's schema already (per-migration
+      // tx means the failed migration was rolled back).
+      const backupVersion = await migrationFlags.getBackupVersion();
+      if (backupVersion > 0) {
+        await migrationFlags.setVersion(backupVersion);
+      }
+      // Clear the backup marker — we've consumed it.
+      await migrationFlags.clearBackupVersion();
+    } finally {
+      onRetry();
+    }
+  };
+
   return (
     <main style={FALLBACK_WRAPPER_STYLE} role="alert">
       <h1 style={{ fontSize: "var(--text-h1)", fontWeight: 700, margin: 0 }}>
-        We couldn't open your data.
+        We couldn&apos;t open your data.
       </h1>
       <p style={{ color: "var(--text-muted)", maxWidth: "40ch" }}>
-        Something went wrong setting up the local database. Your data is only on this device, so a
-        reset is the fastest way out. This will clear everything and start fresh.
+        Something went wrong setting up the local database.{" "}
+        {restoreBackupAvailable
+          ? "You can try again, restore to your previous data, or reset the app to start fresh."
+          : "Your data is only on this device, so a reset is the fastest way out. This will clear everything and start fresh."}
       </p>
       {error ? (
         <pre
@@ -238,13 +263,26 @@ const MigrationFailureScreen: React.FC<{ error: string | null; onRetry: () => vo
         <button type="button" style={FALLBACK_GHOST_STYLE} onClick={onRetry} disabled={working}>
           Retry
         </button>
+        {restoreBackupAvailable ? (
+          <button
+            type="button"
+            style={{
+              ...FALLBACK_ACTION_STYLE,
+              background: "var(--color-score-good, #F29900)",
+            }}
+            onClick={handleRestore}
+            disabled={working}
+          >
+            {working ? "Restoring\u2026" : "Restore backup"}
+          </button>
+        ) : null}
         <button
           type="button"
           style={FALLBACK_ACTION_STYLE}
           onClick={handleReset}
           disabled={working}
         >
-          {working ? "Resetting…" : "Reset app"}
+          {working ? "Resetting\u2026" : "Reset app"}
         </button>
       </div>
     </main>
@@ -339,7 +377,13 @@ const BootGate: React.FC = () => {
       return <App />;
 
     case BootStage.MigrationFailed:
-      return <MigrationFailureScreen error={result.error} onRetry={retry} />;
+      return (
+        <MigrationFailureScreen
+          error={result.error}
+          onRetry={retry}
+          restoreBackupAvailable={result.stages.restoreBackupAvailable}
+        />
+      );
 
     case BootStage.UnexpectedError:
       return <UnexpectedErrorScreen error={result.error} onRetry={retry} />;

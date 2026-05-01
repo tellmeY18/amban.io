@@ -18,8 +18,10 @@
 11. [Insights Engine](#11-insights-engine)
 12. [Local Storage Strategy](#12-local-storage-strategy)
 13. [Edge Cases & Rules](#13-edge-cases--rules)
-14. [Future Scope](#14-future-scope)
-15. [Appendices](#appendices)
+14. [Database Resilience & Migration Discipline](#14-database-resilience--migration-discipline)
+15. [SMS Capture & Auto-Suggestions (Android)](#15-sms-capture--auto-suggestions-android)
+16. [Future Scope](#16-future-scope)
+17. [Appendices](#appendices)
     - [Appendix A: INR Formatting Utility](#appendix-a-inr-formatting-utility)
     - [Appendix B: Score Calculation Function](#appendix-b-score-calculation-function)
     - [Appendix C: Spend Categories](#appendix-c-spend-categories)
@@ -496,6 +498,27 @@ When today's date matches an income source's `creditDay`:
 When a recurring payment's `dueDay` is within 3 days:
 - Show a chip/card on Home: "⚠️ Room Rent ₹12,000 due in 2 days"
 - This is purely informational — does not auto-deduct from balance
+
+### 6.6 Burst Income / Manual Credit Flow
+
+Real life produces income outside the recurring sources — freelance payments, gifts, refunds, splitwise settlements, side gigs. These need to land in the score the same way burst spends do, just in the opposite direction.
+
+```
+Log tab → "+ Add income" (secondary action next to spend)
+  • Amount input (₹)
+  • Label (free text, e.g. "Freelance — logo design", "Refund — Amazon")
+  • Date (defaults to today; back-dating allowed within the loaded window)
+  • Save → inserts into `manual_credits`
+```
+
+Rules:
+- Manual credits with `credited_at >= latestBalanceSnapshot.recorded_at` are added to the effective balance used by the score (mirroring the snapshot-relative semantics of `spendSinceLastSnapshot`).
+- They are **never** auto-applied to the balance snapshot itself — the snapshot stays append-only and user-controlled.
+- Manual credits show up in Log History interleaved with spends, distinguished by sign and a green tone-token.
+- Editing or deleting a manual credit triggers a score recalc just like a daily log mutation.
+- Same haptic ladder as spend logging: success on save, medium-impact on edit, error on delete-confirm.
+
+This flow is the income-side mirror of the existing daily spend log; reuse the same `CurrencyInput`, the same backfill sheet pattern, and the same toast/haptic vocabulary so the user doesn't context-switch.
 
 ---
 
@@ -976,12 +999,247 @@ If a recurring payment's `dueDay` has passed and the user has already updated th
 
 ---
 
-## 14. Future Scope
+## 14. Database Resilience & Migration Discipline
+
+> **The single most important non-feature in amban.io.** Users have lived with this app for months. A broken migration on app upgrade means lost income data, broken score history, and a betrayal of the local-first promise (there is no cloud to recover from). This section is the contract every release must honour.
+
+### 14.1 Non-Negotiable Guarantees
+
+1. **A clean install must succeed.** First-launch on a brand-new device opens the DB, applies every migration in order, and lands on the Welcome screen. No retry required.
+2. **An upgrade must never lose data.** Installing a newer version over an older version applies only the *unapplied* migrations and preserves every existing row. The user must not see their balance, logs, income, or recurring payments reset.
+3. **A failed migration must be recoverable without data loss in the common case.** Transient failures (locked DB, OS interrupt) self-heal on next launch. The destructive "Reset App" path is the *escape hatch*, never the default.
+4. **Migrations are append-only and immutable.** Once `00X_*.sql` ships in a tagged release, its contents are frozen. Bug fixes ship as new migrations.
+5. **The runner does not depend on the SQLite plugin's SQL splitter.** `stripSqlComments` + statement normalisation runs before any SQL hits the native binding (see v0.1.3 fix).
+
+### 14.2 Versioning Model
+
+- Schema version is owned by **two** mirrored stores so a corrupted Preferences cache cannot brick a working DB and vice versa:
+  - SQLite: `schema_migrations` table (one row per applied migration with `version`, `applied_at`, `checksum`).
+  - Preferences: `PreferenceKey.SchemaVersion` integer (the highest applied version).
+- On boot, the runner reconciles the two: the SQLite table is the source of truth; the Preferences value is updated to match. If Preferences disagrees, no harm — it gets corrected.
+- The legacy `settings.onboarding_version` column is **deprecated** as a migration tracker (kept only as an onboarding-flow marker for resumability).
+
+```sql
+-- Shipped in 003_schema_migrations.sql for v0.2.0.
+-- The runner backfills this table from the existing Preferences value
+-- on first launch of v0.2 so v0.1.x installs don't re-apply migrations.
+CREATE TABLE IF NOT EXISTS schema_migrations (
+  version INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  checksum TEXT NOT NULL,        -- SHA-256 of the normalised SQL
+  applied_at TEXT NOT NULL
+);
+```
+
+### 14.3 Migration File Rules
+
+- Numbered `NNN_short_name.sql`, three-digit zero-padded, monotonically increasing.
+- Each file is registered in `src/db/migrations/index.ts` with `{ version, name, sql, checksum }`. **The catalogue is asserted at boot** — if a file exists on disk that the catalogue doesn't know about (or vice versa), the build fails in dev and the boot path renders the migration-failure screen in prod.
+- A CI integration test (`scripts/verify-migrations.ts`) reconciles the on-disk migration files against the catalogue **and** runs every migration sequentially against an empty DB on a real native binding (Android emulator job in CI). This guardrail blocks the v0.1.2 / v0.1.3 class of bug at PR time, not at release time.
+- Allowed operations: `CREATE TABLE IF NOT EXISTS`, `ALTER TABLE … ADD COLUMN`, `CREATE INDEX IF NOT EXISTS`, idempotent `INSERT OR IGNORE` seeds, data backfills wrapped in `INSERT OR IGNORE` / `UPDATE … WHERE` guards.
+- Forbidden: `DROP TABLE` against a populated table, destructive `ALTER TABLE` shapes, anything that depends on a specific prior data state without an idempotent guard.
+- **Table renames / column drops** use the rebuild-and-rename pattern in a single migration: create new shape, copy data with explicit column mapping, drop old, rename new — all inside the runner's transaction.
+
+### 14.4 Runner Behaviour
+
+```typescript
+// Pseudo-code; real impl lives in src/db/db.ts
+async function runMigrations(db) {
+  await db.execute(SCHEMA_MIGRATIONS_DDL);                 // bootstrap the tracker table
+  const applied = await readAppliedVersions(db);           // Set<number>
+  const pending = MIGRATION_CATALOG.filter(m => !applied.has(m.version));
+  if (pending.length === 0) return;
+
+  for (const m of pending) {                               // one transaction per migration
+    const sql = stripSqlComments(m.sql);
+    try {
+      await db.execute('BEGIN');
+      await db.execute(sql, /* transaction= */ false);     // single-statement-aware
+      await db.run(
+        'INSERT INTO schema_migrations (version, name, checksum, applied_at) VALUES (?,?,?,?)',
+        [m.version, m.name, m.checksum, nowIso()],
+      );
+      await db.execute('COMMIT');
+    } catch (err) {
+      await db.execute('ROLLBACK');
+      await prefs.setBool(PreferenceKey.MigrationFailed, true);
+      await prefs.setString(PreferenceKey.MigrationError, formatErr(err, sql));
+      throw err; // BootGate renders MigrationFailed screen
+    }
+  }
+  await prefs.setNumber(PreferenceKey.SchemaVersion, MIGRATION_CATALOG.at(-1).version);
+}
+```
+
+Key properties:
+- **Per-migration transaction** (not per-batch): a failure in migration `N` leaves migrations `1…N-1` durably applied. Next launch resumes at `N`.
+- **`stripSqlComments` first.** Block and line comments are removed (string-literal-state-aware) before the native binding sees the SQL. This is the v0.1.3 fix, kept permanent.
+- **`PRAGMA foreign_keys = ON`** is set on every fresh connection, *outside* the migration transaction.
+- **Error preview.** The first 500 chars of the offending normalised statement are persisted in `PreferenceKey.MigrationError` so the escape-hatch screen and `adb logcat` show what choked, not just "migration failed".
+
+### 14.5 Pre-Migration Backup (v0.2.0+)
+
+Before applying any pending migration on an existing install, the runner takes a **point-in-time snapshot**:
+
+- A copy of the live SQLite file is written next to it as `amban.db.bak-vN` where `N` is the *current* (pre-migration) schema version.
+- Only the latest backup is retained; older `.bak-*` files are pruned.
+- On a successful migration run, the backup is kept until the next launch (one-launch grace period) then pruned.
+- On a failed migration run, the BootGate offers a third option alongside *Retry* and *Reset App*: **"Restore last backup"** — closes the connection, replaces `amban.db` with the `.bak-*`, and reboots the app to the previous schema. The user keeps their data; they're back on the prior app version's schema until a fixed migration ships.
+- Backups are encrypted-at-rest only insofar as the OS protects app-private storage (no extra crypto — keep it dumb).
+
+### 14.6 Boot Path Outcomes
+
+`bootstrapApp()` in `src/boot.ts` returns one of:
+
+| Stage | Trigger | UI |
+|---|---|---|
+| `Ready` | DB open + all migrations applied + stores hydrated | App renders |
+| `MigrationFailed` | Any migration threw | Full-screen escape hatch with Retry / Restore Backup / Reset App |
+| `UnexpectedError` | Anything else (DB open failed, hydration crashed) | Generic error with Try Again / Reset App |
+
+The escape-hatch screen is **non-dismissable** — the user cannot navigate past it into a half-broken app. It exposes:
+- A short, friendly explanation.
+- The persisted error preview (collapsible, copyable for support).
+- App version + commit SHA from `constants/buildInfo.ts`.
+- Three CTAs: Retry, Restore Backup (if a `.bak-*` exists), Reset App (typed-confirmation).
+
+### 14.7 Reset App vs Restore Backup
+
+| Action | Data Outcome | When to Use |
+|---|---|---|
+| **Retry** | None | First response; transient failures self-heal here. |
+| **Restore Backup** | Reverts schema + data to pre-upgrade state; user stays on old app version's behaviour until a fixed build lands. | Migration is buggy. User keeps everything. |
+| **Reset App** | Total wipe (Appendix I). | Backup is corrupted or absent and the user can't wait for a fix. |
+
+### 14.8 Test Plan (CI Gate)
+
+Every release must pass these checks before tagging:
+
+1. **Fresh install matrix.** Empty DB → run all migrations → schema version equals `MIGRATION_CATALOG.at(-1).version`. Asserted on the native Android binding in CI.
+2. **Upgrade matrix.** For every prior shipped version (v0.1.0, v0.1.1, v0.1.2, v0.1.3, v0.2.0-rc-N, …), seed a DB at that version's schema, run the runner against current `HEAD`, assert all rows survive and schema version advances.
+3. **Catalogue drift.** Asserts `MIGRATION_CATALOG` matches the on-disk `migrations/` directory exactly (same versions, same checksums).
+4. **Comment-heavy SQL.** A regression test re-applying migration 002 (the v0.1.2 culprit) must pass on the native binding, not just SQL.js.
+5. **Backup round-trip.** Take a backup, corrupt the live DB, restore, verify all rows.
+
+No release ships without a green run on this suite.
+
+---
+
+## 15. SMS Capture & Auto-Suggestions (Android)
+
+> Privacy-first, opt-in, on-device-only. amban does not transmit a single SMS character anywhere — it reads, parses locally, and presents suggestions for the user to confirm.
+
+### 15.1 What This Solves
+
+Users already log spends manually. But every UPI debit, card swipe, and credit produces a transactional SMS from their bank. Reading those messages locally lets amban *suggest* entries the user can confirm with one tap, dramatically reducing friction.
+
+### 15.2 Platform Scope (v0.2.0)
+
+- **Android only.** iOS does not expose SMS to third-party apps and never will. The Settings entry point is hidden on iOS.
+- Plugin: a thin custom Capacitor plugin `@amban/sms-reader` (lives in `android/app/src/main/java/io/amban/app/sms/`) — wraps `android.provider.Telephony.Sms` reads. No third-party SMS-parser SDK; we own the regex.
+- Permission: `android.permission.READ_SMS` — runtime-requested with a clear pre-permission rationale screen.
+
+### 15.3 Permission UX
+
+1. SMS Capture is **off by default**. The user finds it under Settings → Connected Sources → SMS Capture.
+2. Toggling it on shows a full-screen rationale before the OS dialog: what we read, what we do with it, what we never do (network, share, sell).
+3. On grant: schedule a one-time scan of the last 7 days (configurable up to 30) and surface the suggestions inbox.
+4. On deny: settings row stays toggled off; no nag. A single "Try again" affordance is fine.
+5. Toggling off later: cancels the on-resume scan, retains parsed suggestions until the user clears them, never re-reads SMS until re-granted.
+
+### 15.4 Trigger Model (v0.2.0)
+
+- **App-foreground scan.** On every app resume (and on cold start once permission is granted), scan SMS received since `last_sms_scan_at` (Preferences key, defaulted to `now - 24h` on first scan).
+- **Idempotent.** Each parsed SMS produces a stable `messageId` (Telephony provider's `_id` plus body hash); duplicates are skipped.
+- **No background service in v0.2.** Live capture / push-on-receive (`SmsReceiver` BroadcastReceiver) and a Quick-Settings tile are deferred to v0.3 — see Future Scope.
+
+### 15.5 Parser
+
+- Lives in `src/utils/smsParser.ts`. Pure function: `parseSms({ sender, body, receivedAt }) → ParsedTxn | null`.
+- Templates cover the major Indian banks + UPI providers: HDFC, ICICI, SBI, Axis, Kotak, IDFC, GPay, PhonePe, Paytm, BHIM. Each template is a named regex with capture groups for `amount`, `direction` (`debit` | `credit`), `merchantOrCounterparty`, `account` (last 4), `referenceId`.
+- Rejection rules: marketing/promotional senders (alpha-only senders that don't match the bank allowlist), OTP messages, balance enquiries with no transaction.
+- Confidence score `0..1` per parse; suggestions below `SMS_MIN_CONFIDENCE` (Appendix D) are dropped silently.
+
+### 15.6 Suggestion Inbox
+
+A new top-level surface — a card on Home above the insight carousel and a dedicated row in the Log tab — shows pending suggestions:
+
+```
+┌─────────────────────────────────┐
+│ 💡 3 suggestions from your SMS  │
+│                                 │
+│ ─₹ 420   Swiggy   Today 1:42 PM │
+│ HDFC ••1234                     │
+│ [ Add as spend ]  [ Dismiss ]   │
+│                                 │
+│ +₹ 2,000  UPI from Anita        │
+│ Today 11:15 AM                  │
+│ [ Add as income ]  [ Dismiss ]  │
+│                                 │
+│ See all →                       │
+└─────────────────────────────────┘
+```
+
+Per suggestion:
+- **One-tap accept.** Debit suggestions → prefill Daily Log with amount + merchant in notes. Credit suggestions → prefill Manual Credit sheet with amount + counterparty in label.
+- **One-tap dismiss.** Marks the suggestion as `dismissed` so it never re-surfaces.
+- **Edit before confirm.** Tapping the row (not the buttons) opens a sheet with editable fields; saving accepts.
+- Empty state: nothing rendered (no "You have no SMS suggestions" — that's noise).
+
+### 15.7 Storage Schema
+
+```sql
+-- Shipped in 004_sms_suggestions.sql for v0.2.0.
+CREATE TABLE IF NOT EXISTS sms_suggestions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  message_id TEXT NOT NULL UNIQUE,        -- stable id from Telephony provider
+  received_at TEXT NOT NULL,              -- ISO timestamp of the SMS
+  sender TEXT NOT NULL,                   -- e.g. 'HDFCBK', 'AX-PHONPE'
+  direction TEXT NOT NULL CHECK (direction IN ('debit', 'credit')),
+  amount REAL NOT NULL CHECK (amount > 0),
+  counterparty TEXT,                      -- merchant or remitter name; nullable
+  account_last4 TEXT,                     -- last 4 of account/card; nullable
+  reference_id TEXT,                      -- bank ref/UPI ref; nullable
+  confidence REAL NOT NULL,               -- 0..1
+  status TEXT NOT NULL DEFAULT 'pending'  -- 'pending' | 'accepted' | 'dismissed'
+      CHECK (status IN ('pending', 'accepted', 'dismissed')),
+  linked_log_id INTEGER,                  -- daily_logs.id when accepted as spend
+  linked_credit_id INTEGER,               -- manual_credits.id when accepted as income
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_sms_suggestions_status
+  ON sms_suggestions (status, received_at DESC);
+```
+
+### 15.8 Privacy Contract
+
+Written verbatim into the in-app rationale screen and the privacy page:
+
+- amban reads SMS *only on this device*.
+- amban never sends SMS contents over the network — there is no network code in the build.
+- amban only persists the parsed fields above. The original SMS body is **not** stored.
+- The user can revoke permission at any time from Android Settings; the app respects the change immediately.
+- Reset App wipes every parsed suggestion alongside everything else.
+
+### 15.9 Edge Cases
+
+- **Multiple SIMs / dual-SIM.** All SMS sources are read; `account_last4` distinguishes them in the UI.
+- **SMS deleted from inbox after parse.** Suggestion remains in our store — we don't re-validate against the inbox.
+- **User accepts a debit suggestion that overlaps with a manual log.** The accept flow opens the Daily Log prefilled but additive (per the existing quick-amount-chip behaviour); the user sees today's running total before confirming.
+- **Bank changes their SMS template.** Confidence drops; we silently fail to parse those messages. A monthly "unparsed senders" telemetry would help — but we have zero telemetry by policy. Instead, ship a dev-only screen behind the style guide that lists unparsed bank-allowlisted senders so future template patches can land from real-world samples a developer voluntarily shares.
+
+---
+
+## 16. Future Scope
 
 These are NOT in v1.0 but are worth architectural consideration:
 
 | Feature | Notes |
 |---|---|
+| Live SMS capture (BroadcastReceiver) | Push-on-receive instead of foreground-resume scan; lights up the Quick Settings tile experience. |
+| Quick Settings tile / home-screen widget | Add spend or accept the latest SMS suggestion without opening the app. |
+| iOS Notification Service Extension | Read banking notifications (the iOS-equivalent of SMS capture, modulo Apple's restrictions). |
 | Spend Categories per Log | Allow tagging spend by category (Food, Travel, etc.) |
 | Category-wise budget caps | "Don't spend more than ₹5,000/month on dining" |
 | CSV/JSON Export | Local export for personal backup |
@@ -1212,6 +1470,8 @@ No data is retained. No undo.
 ---
 
 ## Appendix J: Migration Strategy
+
+> **Superseded by [§14 — Database Resilience & Migration Discipline](#14-database-resilience--migration-discipline) as of v0.2.0.** Kept for historical context.
 
 Even in v1, migrations must be first-class — users will be on the app for months between updates.
 

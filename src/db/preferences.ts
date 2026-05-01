@@ -55,6 +55,8 @@ export const PreferenceKey = {
   MigrationFailed: "amban.migration_failed",
   /** Error message captured when migrations failed. Cleared on success. */
   MigrationError: "amban.migration_error",
+  /** Integer — schema version of the last pre-migration backup taken. */
+  LastMigrationBackupVersion: "amban.last_migration_backup_version",
 
   // ---- Onboarding ----
   /** '1' once the user has completed every onboarding step. */
@@ -69,10 +71,18 @@ export const PreferenceKey = {
   LastNotificationScheduleDate: "amban.last_notification_schedule_date",
   /** '1' if the user has ever granted notification permission. */
   NotificationsPermissionGranted: "amban.notifications_permission_granted",
+  /** '1' when the runtime asked for POST_NOTIFICATIONS on Android 13+. */
+  NotificationsRuntimeAsked: "amban.notifications_runtime_asked",
 
   // ---- Insights ----
   /** JSON array — dismissed insight records (id + timestamp). */
   DismissedInsights: "amban.dismissed_insights",
+
+  // ---- SMS capture (Android only, §15) ----
+  /** ISO timestamp — last SMS scan completion. */
+  LastSmsScanAt: "amban.last_sms_scan_at",
+  /** '1' when SMS capture is enabled by the user. */
+  SmsCaptureEnabled: "amban.sms_capture_enabled",
 
   // ---- App metadata ----
   /** Semver string — last app version that completed boot. */
@@ -279,4 +289,11 @@ export const migrationFlags = {
 
   isFailed: (): Promise<boolean> => prefs.getBool(PreferenceKey.MigrationFailed, false),
   getError: (): Promise<string | null> => prefs.getString(PreferenceKey.MigrationError, null),
+
+  /** Schema version of the last pre-migration backup, or 0 if none exists. */
+  getBackupVersion: (): Promise<number> =>
+    prefs.getNumber(PreferenceKey.LastMigrationBackupVersion, 0),
+  setBackupVersion: (version: number): Promise<void> =>
+    prefs.setNumber(PreferenceKey.LastMigrationBackupVersion, version),
+  clearBackupVersion: (): Promise<void> => prefs.remove(PreferenceKey.LastMigrationBackupVersion),
 } as const;

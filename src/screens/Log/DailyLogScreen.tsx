@@ -52,6 +52,7 @@ import { IonContent, IonIcon, IonPage } from "@ionic/react";
 import BottomSheet from "../../components/ui/BottomSheet";
 import CurrencyInput from "../../components/ui/CurrencyInput";
 import DatePicker from "../../components/ui/DatePicker";
+import AddIncomeSheet from "./AddIncomeSheet";
 
 import { CATEGORIES } from "../../constants/categories";
 import type { CategoryKey } from "../../constants/categories";
@@ -133,6 +134,7 @@ const DailyLogScreen: React.FC = () => {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [backfillOpen, setBackfillOpen] = useState(false);
   const [toast, setToast] = useState<Toast | null>(null);
+  const [incomeOpen, setIncomeOpen] = useState(false);
 
   // Auto-dismiss toasts after a beat.
   useEffect(() => {
@@ -408,6 +410,34 @@ const DailyLogScreen: React.FC = () => {
             Add spend entry
           </button>
 
+          {/* Secondary: add income */}
+          <button
+            type="button"
+            onClick={() => {
+              void haptics.selection();
+              setIncomeOpen(true);
+            }}
+            aria-label="Add income"
+            style={{
+              minHeight: "var(--hit-target-min)",
+              padding: "var(--space-sm) var(--space-lg)",
+              borderRadius: "var(--radius-md)",
+              backgroundColor: "transparent",
+              color: "var(--color-score-excellent)",
+              border: "1.5px solid var(--color-score-excellent)",
+              fontFamily: "var(--font-body)",
+              fontSize: "var(--text-body)",
+              fontWeight: "var(--font-weight-semibold)",
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: "var(--space-xs)",
+              cursor: "pointer",
+            }}
+          >
+            <IonIcon icon={Icons.finance.cash} aria-hidden="true" />+ Add income
+          </button>
+
           {/* Entries list */}
           {todayEntries.length === 0 ? (
             <div
@@ -607,6 +637,12 @@ const DailyLogScreen: React.FC = () => {
             setToast({ tone: "positive", message: `Backfilled ${entries.length} days.` });
             void haptics.tapMedium();
           }}
+        />
+
+        <AddIncomeSheet
+          isOpen={incomeOpen}
+          onDismiss={() => setIncomeOpen(false)}
+          onSaved={(msg) => setToast({ tone: "positive", message: msg })}
         />
       </IonContent>
     </IonPage>

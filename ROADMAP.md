@@ -10,7 +10,17 @@
 
 ## Current Status
 
-*Last updated: **v0.1.3 hotfix tagged**. Second fix on the v0.1.1 → v0.1.2 chain. v0.1.2 correctly registered `002_spend_entries.sql` in the runner's catalogue (`src/db/db.ts`), but the migration still failed on native Android because `@capacitor-community/sqlite`'s `execute(sql, transaction=true)` splits the script on `;` with a naive splitter that does not track string-literal or comment state — migration 002's comment-heavy SQL (long prose blocks, a `CHECK (amount > 0)` expression adjacent to `--` comments, column-separating comment lines) produced fragments the native binding couldn't parse, so the whole transaction rolled back and fresh installs / v0.1.2-upgraded devices stayed stuck at `schema_version = 1`. v0.1.3 adds a `stripSqlComments(sql)` preprocessor in the runner that removes block and line comments (while respecting single-quoted string state so literals like `'10--20'` are untouched) and collapses trailing whitespace before the SQL reaches the plugin; every migration — past, present, future — now gets the same normalisation, so comment-heavy SQL no longer depends on the plugin's splitter being clever. Migration-failure errors now include a 500-char preview of the normalised SQL so the escape-hatch screen / `adb logcat` show exactly which statement choked. Migration files themselves remain immutable (Appendix J); the fix lives purely in the runner. Existing v0.1.1 / v0.1.2 installs self-heal on first launch of 0.1.3 — no data loss, no user-visible reset. The release-engineering guardrail for this class of bug (a boot-path integration test that reconciles on-disk migration files against the runner's catalogue AND confirms every migration applies cleanly on the native binding) is still tracked for v0.2. The rest of v0.1.1's content — two-tier logging (per-entry capture + end-of-day confirmation), `ACCESS.md` audit + 10 grouped a11y tracking issues, AGPL → GPL v3 license switch, project-owned debug keystore + CI signature verification — all carries forward unchanged. Phases 3 – 13 complete; Phase 15 (Android shell) landed to the extent needed to ship a debug-signed APK; Phase 16 (release engineering) delivered via the GitHub Actions release workflow with the signature-verification guardrail added in 0.1.1. Phases 14 (polish), iOS half of Phase 15, and Phase 17 (store submission) remain and are out of scope for the alpha.*
+*Last updated: **v0.2.0 in planning**. v0.1.3 alpha shipped: full onboarding → Home → Log → Insights → Settings loop, debug-signed Android APK out via the GitHub Actions release workflow, migration runner stabilised end-to-end (per-migration transactions, comment-stripping preprocessor, SQLite + Preferences mirrored schema version). Real-world dogfooding surfaced four areas that must land before we cut v0.2.0:*
+
+*1. **Database resiliency is the headline.** Every alpha upgrade so far has lost user data — fresh installs work, in-place upgrades don't. v0.2.0 ships the §14 contract end-to-end: a dedicated `schema_migrations` table, per-migration transactions with idempotent catalogue assertion, the v0.1.3 `stripSqlComments` preprocessor frozen in, **a pre-migration backup** of the live SQLite file with a Restore-Backup escape hatch, and a CI gate that runs the full upgrade matrix against every prior shipped schema on the native Android binding. No release ships without that suite green.*
+
+*2. **Burst income / manual credits.** The codebase already has a `manual_credits` table and a financeStore mutator; v0.2 promotes it to a first-class user-facing flow that mirrors the existing daily-spend log (see §6.6). New "+ Add income" surface on the Log tab, interleaved sign-aware history rows, score recalc on every mutation.*
+
+*3. **SMS Capture (Android).** The big new feature. Privacy-first, opt-in, on-device-only — no network code, period. Custom Capacitor plugin reading `android.provider.Telephony.Sms`, deterministic regex parser per Indian bank/UPI provider, suggestions written to a new `sms_suggestions` table, surfaced as a one-tap-accept inbox on Home and the Log tab. Full spec in §15. Live BroadcastReceiver capture and the Quick-Settings tile are explicitly deferred to v0.3.*
+
+*4. **Notifications actually firing.** The Phase 12 scheduler shipped wired but in practice users aren't seeing the daily prompt. v0.2 hardens the path on real devices: Android 13+ `POST_NOTIFICATIONS` runtime ask post-onboarding, exact-alarm permission gating with a graceful inexact fallback, OEM aggressive-kill diagnostics (Xiaomi/OPPO/Vivo battery-saver detection with a one-tap "open battery settings" CTA), a dev-only "Send test notification now" affordance in Settings, and an end-to-end on-device test plan that confirms the daily prompt fires across cold-start / background / killed / device-rebooted states.*
+
+*Phases 3 – 13 and the alpha-scope slices of Phases 15 – 16 carry forward unchanged. Phase 14 polish stays deferred to post-v0.2. New phases 18 – 21 below own the v0.2.0 work; the existing definition-of-done extends with the §14.8 CI gate.*
 
 Legend: ✅ done · 🟡 in progress · ⬜ not started
 
@@ -30,10 +40,14 @@ Legend: ✅ done · 🟡 in progress · ⬜ not started
 | Phase 11 — Insights Engine | ✅ done | All nine generators in `utils/insightGenerators.ts` implemented (§11.1 Lifestyle Cost, §11.2 Savings Rate with negative-rate priority bump, §11.3 Streak with adjacency check, §11.4 Biggest Cost with 50% warning tone, §11.5 Projected Month-End with negative-projection critical tone, §11.6 Best & Worst Day, §11.7 Lifestyle Upgrade gated on `OVERSPEND_STREAK_DAYS`, §11.8 Coffee Math walking `COFFEE_MATH_THRESHOLDS` top-down, §11.9 Income Day Countdown). `useInsights` runs every generator against a shared `InsightContext` derived from `useAmbanScore` + stores, filters dismissed IDs (TTL-bounded via `PreferenceKey.DismissedInsights`), sorts by priority then registry order, caps at `HOME_CAROUSEL_MAX` when `capped: true`. `InsightCarousel` on Home auto-rotates (pauses on hover/touch, honours reduce-motion), swipe-to-dismiss with `INSIGHT_DISMISS_TTL_HOURS` persistence. `InsightsScreen` renders the full-page version — 30-day area chart with score reference line, recurring+log category pie with legend, uncapped insight list, recurring-share-of-income progress bar with tone-banded fill. |
 | Phase 12 — Local Notifications | ✅ done | `useNotifications` is the full scheduler. Appendix E ID ranges enforced (`1000` daily, `2000–2999` recurring, `3000–3999` salary, `4000–4999` reserved); cancel pass enumerates `getPending()` and culls anything in our ranges so stale stranded notifications from buggy pasts can't survive. Daily prompt uses deterministic day-of-year rotation across the five §10.1 templates (stable within a day, rotates across days). Upcoming-payment reminders fire at 9am `UPCOMING_PAYMENT_NOTIFY_DAYS` before each active payment's next due date; salary nudges fire at 10am on each active source's next credit day. Fingerprint-based dedupe via `PreferenceKey.LastNotificationScheduleDate` (`todayIso|inputsHash`) skips reschedules when nothing changed. Auto-reschedule effect subscribes to the store slices that shape the schedule — onboarding completion, income/recurring/settings edits, name change all trigger a rebuild. Permission state exposed as a narrow enum; `NotificationSettings` renders the master toggle + native time picker + "open system settings" nudge on denied. Deep-linking: daily prompt embeds `extra.target = "log"` so the `amban://log` handler in `App.tsx` routes the tap to `/log`. |
 | Phase 13 — Settings & Lifecycle | ✅ done | Everything from mostly-done plus: About row now reads real build metadata from `constants/buildInfo.ts` (version, short commit SHA, build date, all injected at build time via `vite.config.ts` → `__APP_VERSION__` / `__APP_COMMIT__` / `__APP_BUILD_DATE__`); `/settings/privacy` ships a real on-device privacy statement reiterating the no-network promise and pointing to the reset flow; `utils/exportData.ts` produces a versioned JSON document of every SQLite row + amban-scoped preference and hands it to the Web Share API (falling back to an anchor-download on desktop), wired behind the Settings → Export data row. |
-| Phase 14 — Polish & Micro-interactions | ⬜ not started | Out of scope for v0.1.0 alpha; tracked for the next release. |
-| Phase 15 — Native Shells: iOS & Android | 🟡 android-only for alpha | Android manifest hardened for alpha distribution: `POST_NOTIFICATIONS`, `SCHEDULE_EXACT_ALARM`, `USE_EXACT_ALARM`, `VIBRATE`, `RECEIVE_BOOT_COMPLETED` permissions added; launcher activity locked to `android:screenOrientation="portrait"` per Appendix H; `amban://` deep-link intent filter registered. `versionName` aligned to `0.1.3` (`versionCode 103` — encoding is `MAJOR*10000 + MINOR*100 + PATCH`, strictly monotonic + Play-compatible). Project-owned debug keystore committed at `android/app/debug.keystore` and wired via `signingConfigs.debug` in `android/app/build.gradle` so every build — local or CI — signs with the same certificate and APKs upgrade in place across environments. Debug-signed APK is what ships from the alpha release workflow; release signing, Play-ready keystore, adaptive icon + splash polish, and the entire iOS half are deferred. |
-| Phase 16 — Release Engineering | ✅ done (alpha scope) | `.github/workflows/release.yml` drives the alpha release: triggers on `v*` tag pushes (and `workflow_dispatch` for dry runs), installs Nix (JDK 21 + Android SDK + Gradle + Node 22 from `flake.nix`), runs the idempotent `scripts/bump-version.sh` sync-against-tag step so every version-bearing file (`package.json`, `package-lock.json`, `android/app/build.gradle` versionName + derived versionCode, doc-comment examples, and the workflow's own dispatch default) matches the tag before the build, runs typecheck + lint + web build + bundle-level privacy grep, syncs Capacitor, assembles the debug-signed APK, verifies the APK's signer SHA-256 matches the pinned `EXPECTED_DEBUG_CERT_SHA256` for the committed keystore (fails fast on any fallback to a runner-local debug keystore), stages it as `amban-vX.Y.Z-android-debug.apk` with a SHA-256 sidecar, uploads it as a workflow artifact, and publishes a GitHub Release (marked prerelease) with the APK attached. Release-signing keystore, migration-catalogue integration test, and `build:ios`/`release:ios` commands are deferred to the v0.2 release cut. |
-| Phase 17 — Store Submission | ⬜ not started | Explicitly out of scope for v0.1.3 — alpha is side-load only. |
+| Phase 14 — Polish & Micro-interactions | ⬜ not started | Out of scope for v0.2.0 — deferred to v0.3. |
+| Phase 15 — Native Shells: iOS & Android | 🟡 android-only for alpha | Android manifest hardened for alpha distribution (carries forward unchanged into v0.2). v0.2 adds the `READ_SMS` permission (gated, runtime-asked) and the `POST_NOTIFICATIONS` + exact-alarm hardening from Phase 21. iOS half still deferred. |
+| Phase 16 — Release Engineering | ✅ done (alpha scope) | v0.2 extends this with the migration-catalogue + upgrade-matrix CI gate from Phase 18. |
+| Phase 17 — Store Submission | ⬜ not started | Out of scope for v0.2.0 — alpha is still side-load only. |
+| **Phase 18 — Database Resilience (v0.2.0)** | 🟡 in progress | Highest priority of v0.2. Implements the full §14 contract: `schema_migrations` tracker table, per-migration transactions, frozen `stripSqlComments` preprocessor, pre-migration backup with Restore-Backup escape hatch, native-binding upgrade-matrix CI gate. **No release without §14.8 green.** |
+| **Phase 19 — Burst Income / Manual Credits (v0.2.0)** | ⬜ not started | Promotes the existing `manual_credits` plumbing to a first-class user-facing flow per §6.6. New "+ Add income" surface on Log tab, sign-aware interleaved history rows, edit/delete with score recalc. |
+| **Phase 20 — SMS Capture & Auto-Suggestions (v0.2.0, Android)** | ⬜ not started | Custom `@amban/sms-reader` Capacitor plugin, on-device parser, `sms_suggestions` table, one-tap-accept inbox on Home + Log. Full spec in §15. Live BroadcastReceiver + widget deferred to v0.3. |
+| **Phase 21 — Notifications Hardening (v0.2.0)** | ⬜ not started | Make the daily prompt actually fire on real devices. Android 13+ runtime permission flow, exact-alarm gating, OEM battery-saver diagnostics, dev-only test-fire button, end-to-end on-device verification matrix. |
 
 ### Phases 6 – 12 — what landed this session
 
@@ -131,8 +145,12 @@ Legend: ✅ done · 🟡 in progress · ⬜ not started
 16. [Phase 15 — Native Shells: iOS & Android](#phase-15--native-shells-ios--android)
 17. [Phase 16 — Release Engineering](#phase-16--release-engineering)
 18. [Phase 17 — Store Submission](#phase-17--store-submission)
-19. [Cross-cutting Tracks](#cross-cutting-tracks)
-20. [Definition of Done for Initial Release](#definition-of-done-for-initial-release)
+19. [Phase 18 — Database Resilience (v0.2.0)](#phase-18--database-resilience-v020)
+20. [Phase 19 — Burst Income / Manual Credits (v0.2.0)](#phase-19--burst-income--manual-credits-v020)
+21. [Phase 20 — SMS Capture & Auto-Suggestions (v0.2.0)](#phase-20--sms-capture--auto-suggestions-v020)
+22. [Phase 21 — Notifications Hardening (v0.2.0)](#phase-21--notifications-hardening-v020)
+23. [Cross-cutting Tracks](#cross-cutting-tracks)
+24. [Definition of Done for Initial Release](#definition-of-done-for-initial-release)
 
 ---
 
@@ -445,6 +463,111 @@ Exit criteria: Both apps are "Ready for Sale" / "Published". The listing screens
 
 ---
 
+## Phase 18 — Database Resilience (v0.2.0)
+
+> **The headline phase of v0.2.0.** Every other v0.2 deliverable is gated on this. Until upgrades are provably non-destructive against every prior shipped schema, nothing else ships.
+
+Reference contract: [`CLAUDE.md` §14](./CLAUDE.md#14-database-resilience--migration-discipline).
+
+- **Migration catalogue (`src/db/migrations/index.ts`).** Replace any implicit file-globbing with an explicit `MIGRATION_CATALOG` array of `{ version, name, sql, checksum }`. Assert at boot (and as a unit test) that the catalogue matches the on-disk `migrations/` directory exactly. Drift fails the build in dev and renders the `MigrationFailed` screen in prod — it never silently skips a migration.
+- **`schema_migrations` tracker table.** Ship `003_schema_migrations.sql` per §14.2. The runner backfills this table from the existing `PreferenceKey.SchemaVersion` value on first launch of v0.2 so v0.1.x installs don't re-apply migrations 001/002.
+- **Per-migration transactions.** Rewrite `runMigrations` per the §14.4 pseudo-code: one `BEGIN/COMMIT` per migration, not per batch. A failure in migration N leaves N-1 durably applied. The runner records `{version, name, checksum, applied_at}` into `schema_migrations` inside the same transaction as the migration itself.
+- **Freeze the `stripSqlComments` preprocessor.** Move it to `src/db/sql/normalise.ts` with its own unit-test suite (block comments, line comments, comments inside string literals, comments adjacent to `CHECK` expressions — the v0.1.2 culprits). Every migration runs through it before reaching the native binding.
+- **Pre-migration backup.** When pending migrations exist on an existing install, copy `amban.db` → `amban.db.bak-vN` *before* opening the transaction. Prune older `.bak-*` files. Retain the latest backup for one launch after a successful run; prune on the second clean launch. On failure, expose it to the BootGate.
+- **BootGate v2.** Extend `MigrationFailed` to render three CTAs: Retry, **Restore Backup** (only when a `.bak-*` exists for the previous schema), and Reset App (typed-confirmation). Surface the persisted error preview from `PreferenceKey.MigrationError` collapsibly. Show app version + commit SHA from `constants/buildInfo.ts`.
+- **`PreferenceKey` additions.** `SchemaVersion`, `MigrationFailed`, `MigrationError`, `LastMigrationBackupVersion`. Document each in the preferences enum's doc-comment.
+- **Deprecate `settings.onboarding_version` as a migration tracker.** Keep the column for onboarding-flow resumability; stop reading/writing it as a schema-version source-of-truth.
+- **CI gate (`scripts/verify-migrations.ts`).** New script wired into the release workflow that:
+  1. Asserts catalogue ↔ disk parity (versions + checksums).
+  2. Spins up an Android emulator job, seeds an empty DB, runs every migration in order, asserts the final schema version equals `MIGRATION_CATALOG.at(-1).version`.
+  3. For each prior shipped schema (v0.1.0 → 0.1.3), seeds a DB at that version's shape with representative rows, runs the runner against `HEAD`, and asserts every row survives + the schema version advances.
+  4. Re-applies the v0.1.2-culprit comment-heavy migration on the native binding (regression test).
+  5. Backup round-trip: take a backup, mutate the live DB, restore, verify byte-equal restoration.
+- **Tag `release.yml` with the new gate.** The release workflow blocks on `verify-migrations` going green before assembling the APK.
+
+Exit criteria: A user on v0.1.3 installing the v0.2.0 APK over their existing app sees zero data loss, lands directly on Home with their balance/logs/income/recurring intact, and the `schema_migrations` table reports versions 001 – latest applied. The CI upgrade matrix is green for every prior shipped version.
+
+---
+
+## Phase 19 — Burst Income / Manual Credits (v0.2.0)
+
+Reference: [`CLAUDE.md` §6.6](./CLAUDE.md#66-burst-income--manual-credit-flow).
+
+The `manual_credits` table has existed since 001; the financeStore already has `addManualCredit` / `deleteManualCredit`. This phase makes it a real first-class user surface, mirroring the daily spend log.
+
+- **"Add income" entry point on Log tab.** Secondary action next to the existing daily-spend CTA. New `LogTab.tsx` becomes a chooser when both surfaces are present; the spend flow stays the default tap target.
+- **`AddIncomeSheet` component.** Reuses `CurrencyInput`, `DatePicker`, the same notes-style label field, and the same sticky-footer save pattern from `DailyLogScreen`. Date defaults to today; back-dating allowed within `dailyStore.loadedDays`. Save → `financeStore.addManualCredit`.
+- **Score recalc semantics.** Confirm `useAmbanScore` already folds `creditsSinceSnapshot` into effective balance per Phase 5; if anything was bypassing manual credits in scoring, fix and add a regression test.
+- **History interleaving.** `LogHistory` expands to render manual credits alongside daily logs in a single chronological list. Credits get a green tone-token, a `+₹` prefix, and the source label as the row title. Spends keep the existing `−₹` treatment.
+- **Edit / delete.** Long-press / swipe parity with daily logs. Editing an amount or date triggers the same medium-impact haptic + score recalc; delete uses the error-tone confirmation haptic.
+- **Empty-state copy.** When the user has logged spends but no manual credits, surface a one-time hint card on Log tab: "Got a freelance payment or refund? Tap + Add income." Dismissable, single appearance per install.
+- **Onboarding tweak.** Step 5 (recurring payments) gets a one-line explainer at the bottom: "Got irregular income? You can add it any time from the Log tab." No new onboarding step — the surface should discover itself.
+- **Insights interaction.** `useInsights` already considers manual credits where appropriate (Lifestyle Cost, Savings Rate, Projected Month-End). Walk each generator and confirm the math is right when manual credits exist; add a fixture-based test.
+- **SMS Capture handoff.** When Phase 20's parser produces a credit-direction suggestion, accepting it routes through this same `AddIncomeSheet` prefilled with the parsed amount + counterparty.
+
+Exit criteria: A user can add a one-off ₹5,000 freelance credit from the Log tab; their Amban Score increases on the next render; the credit shows on Log History interleaved with spends; editing the amount updates the score; deleting it reverts the score; insights that depend on monthly income reflect the change.
+
+---
+
+## Phase 20 — SMS Capture & Auto-Suggestions (v0.2.0)
+
+> Android-only. iOS entry points stay hidden.
+
+Reference: [`CLAUDE.md` §15](./CLAUDE.md#15-sms-capture--auto-suggestions-android).
+
+- **Custom Capacitor plugin `@amban/sms-reader`.** Native code lives in `android/app/src/main/java/io/amban/app/sms/`. Methods: `requestPermission()`, `checkPermission()`, `readSince({ sinceIso, limit })` returning `{ messageId, sender, body, receivedAt, simSlot }[]`. Wraps `android.provider.Telephony.Sms` reads via a `ContentResolver` query, no third-party SDKs.
+- **Manifest changes.** Add `<uses-permission android:name="android.permission.READ_SMS" />` with `tools:ignore="ProtectedPermissions"` annotation explaining why. Listed in `Settings → Connected Sources → SMS Capture` only — not asked at install time, not asked at onboarding.
+- **`004_sms_suggestions.sql` migration.** Per §15.7 schema. Ships through the Phase 18 runner.
+- **`smsSuggestionsRepo`.** New typed repository: `listPending`, `listAll`, `markAccepted({ id, linkedLogId? , linkedCreditId? })`, `markDismissed`, `upsertParsed`, `lastReceivedAt`. Snake↔camel mapped like every other repo.
+- **Parser (`src/utils/smsParser.ts`).** Pure function per §15.5. Templates for HDFC, ICICI, SBI, Axis, Kotak, IDFC, GPay, PhonePe, Paytm, BHIM. Each template named, regex-only, returns `{ amount, direction, counterparty?, accountLast4?, referenceId?, confidence }`. Marketing/promotional sender allowlist gating. Unit tests per template against fixtures captured from real SMS bodies (anonymised).
+- **Scan orchestrator (`src/utils/smsScan.ts`).** On app resume + cold start: reads `last_sms_scan_at` from prefs, calls plugin `readSince`, runs every message through the parser, drops null + sub-confidence parses, upserts surviving suggestions into `sms_suggestions` (idempotent on `message_id`), updates `last_sms_scan_at`. Time-budgeted (≤1s on a mid-tier device); larger backfills queued behind an idle callback.
+- **`smsSuggestionsStore` (Zustand).** `pending: SmsSuggestion[]`, `hydrate()`, `accept(id, mode)`, `dismiss(id)`, `clearAll()`. Subscribed to by the inbox surfaces.
+- **Suggestion inbox UI.** Per §15.6. Card on Home above the insight carousel (collapsible header, max 3 visible, "See all…" link to a full inbox screen at `/log/suggestions`). A row in the Log tab lists pending suggestions chronologically.
+- **One-tap accept paths.**
+  - Debit → opens `DailyLogScreen` prefilled with `amount` + counterparty in notes; on save, `markAccepted` + `linked_log_id` set.
+  - Credit → opens `AddIncomeSheet` (Phase 19) prefilled with `amount` + counterparty as label; on save, `markAccepted` + `linked_credit_id` set.
+  - Both routes are additive to existing entries (don't blow away today's already-logged amount).
+- **Edit-before-confirm sheet.** Tapping the suggestion row body (not the action buttons) opens an editable sheet; saving routes through the same accept paths.
+- **Settings surface.** New `Settings → Connected Sources → SMS Capture`:
+  - Master toggle (off by default).
+  - Permission status row.
+  - Scan-window selector (last 7 / 14 / 30 days).
+  - "Clear all suggestions" destructive action.
+  - Privacy reaffirmation copy lifted verbatim from §15.8.
+- **Permission UX.** Pre-permission rationale screen before the OS dialog. Denied path: settings row stays off, single "Try again" affordance, no nag. Revocation handled gracefully on next resume.
+- **Reset App integration.** `resetApp()` (Appendix I) cancels any pending scan and clears `sms_suggestions` along with everything else.
+- **iOS gating.** Settings row, store, scan orchestrator, and plugin import all behind a `Capacitor.getPlatform() === 'android'` check. iOS builds must not import the plugin.
+- **Dev-only diagnostics.** Behind the existing `/styleguide` route (DEV-only): a screen listing recent SMS sender + body fingerprints that the parser couldn't classify. Helps grow the template library from real-world samples without telemetry.
+
+Exit criteria: An Android user toggles SMS Capture on, grants permission, and on next resume sees an inbox with their recent UPI/card transactions parsed and ready to one-tap accept. Accepted debits land in `daily_logs`, accepted credits land in `manual_credits`, both link back to the source `sms_suggestions.id`. Dismissed suggestions never re-surface. Zero network calls leave the device. iOS builds compile and run with no SMS surfaces visible.
+
+---
+
+## Phase 21 — Notifications Hardening (v0.2.0)
+
+The Phase 12 scheduler shipped wired but the daily prompt has not been observably firing on real devices. This phase hunts down every reason that's true.
+
+- **Android 13+ runtime permission flow.** `POST_NOTIFICATIONS` is already in the manifest. Add an explicit `LocalNotifications.requestPermissions()` call at the moment the user first hits the notification step in onboarding (existing) **and** a re-ask on first launch after upgrade for users who completed onboarding pre-v0.2 (where the prompt may have been suppressed). Track the request via `PreferenceKey.NotificationsRuntimeAsked`.
+- **Exact-alarm gating.** On Android 12+ (`SCHEDULE_EXACT_ALARM`), check `AlarmManager.canScheduleExactAlarms()` via a tiny native bridge. If false: schedule using inexact alarms, surface a non-blocking banner in `NotificationSettings` explaining the timing may drift by 10–15 minutes, with a "Open exact-alarm settings" CTA that deep-links to the OS toggle. Never block the user.
+- **OEM battery-saver diagnostics.** Detect Xiaomi (MIUI), OPPO (ColorOS), Vivo (Funtouch), Realme, Samsung (One UI) via `Build.MANUFACTURER` and surface a one-time post-onboarding card explaining that these OEMs aggressively kill background tasks and offering a deep-link to the relevant battery-saver settings page. Dismissable, persisted dismissal, no nag.
+- **Schedule verification.** Extend `useNotifications` with a `getScheduledFingerprint()` helper that re-reads `LocalNotifications.getPending()` after every reschedule and asserts the daily prompt's `id: 1000` is present with the expected fire time. Mismatch → dev-only console warning + a `PreferenceKey.LastSchedulerError` record consulted by the diagnostics screen.
+- **Boot-completed handler.** `RECEIVE_BOOT_COMPLETED` is already in the manifest. Confirm Capacitor's notification plugin handles re-registration on device reboot; if not, add a small native receiver that re-runs `scheduleAllNotifications` on boot via a one-shot WorkManager job.
+- **Dev-only test-fire affordance.** New row in `Settings → Notifications` (DEV builds only): "Send test notification in 10 seconds." Schedules a one-shot in the daily-prompt template so the user can verify the path without waiting until 9 PM.
+- **Diagnostics screen.** New DEV-only `Settings → Notifications → Diagnostics` exposing: permission status, exact-alarm capability, last successful schedule timestamp, current pending notifications dump, last scheduler error, OEM detected. Shipped behind `import.meta.env.DEV` so it's not in release builds (but available in any internal QA build).
+- **`docs/NOTIFICATIONS.md`.** Document Android 13+ permission, exact-alarm semantics, the OEM kill-list, and the test-fire procedure. Update when iOS lands.
+- **On-device verification matrix.** Before tagging v0.2.0, verify on at least one device per OEM bucket (one Pixel, one Xiaomi, one Samsung, one OPPO/Vivo if available) that:
+  1. Daily prompt fires at the configured time after a cold-start the previous day.
+  2. Daily prompt fires after the app is fully killed (force-stopped — OEM-dependent).
+  3. Daily prompt fires after a device reboot.
+  4. Tapping the prompt deep-links into `/log` via `amban://log`.
+  5. Upcoming-payment + salary-day notifications fire on their correct dates.
+  6. Disabling the master toggle cancels every pending notification.
+- **Notification copy refresh.** Walk §10.1 templates and confirm they're alive in the deterministic-rotation array; add 2–3 more variants so the rotation feels less tight to long-term users.
+
+Exit criteria: A v0.2.0 user with notifications enabled receives the daily prompt at their configured time on every supported OEM bucket. The diagnostics screen shows the path is healthy. The OEM-specific battery-saver card appears once on affected devices and never again after dismissal. Tapping the prompt always opens the Daily Log screen.
+
+---
+
 ## Cross-cutting Tracks
 
 These tracks run continuously alongside every phase. They don't have their own section in the sequence, but the release isn't done if they're behind.
@@ -477,3 +600,17 @@ The app ships when **all** of the following are true:
 12. Both store listings are approved and the apps are downloadable.
 
 When those twelve lights are green, ship it. Everything else is for the next release.
+
+---
+
+## Definition of Done for v0.2.0
+
+v0.2.0 is in addition to (not a replacement for) the initial-release checklist above. It ships when **all** of the following are also true:
+
+1. Installing v0.2.0 over any v0.1.x build preserves every row in every table; the user lands on Home with no visible reset.
+2. The `verify-migrations` CI suite (§14.8) is green: catalogue parity, fresh-install matrix, upgrade matrix against every prior shipped schema, comment-heavy regression, backup round-trip.
+3. The BootGate's `MigrationFailed` screen offers Retry, Restore Backup (when applicable), and Reset App — each one tested manually with a deliberately broken migration in a dev build.
+4. Burst income flow (§6.6 / Phase 19) is reachable from the Log tab; adding/editing/deleting a manual credit moves the Amban Score in the expected direction within one frame.
+5. SMS Capture (§15 / Phase 20) is shippable on Android: opt-in, parses real-world UPI + card SMS at ≥90% accuracy on the test fixture set, one-tap accept routes correctly to spend or income, zero network calls in the bundle.
+6. The daily notification prompt has been observed firing on a real device for at least three consecutive days across the Pixel + one OEM bucket, with the deep-link routing into `/log`.
+7. iOS build still compiles cleanly with all SMS surfaces gated off and no regressions in the existing Phase 13 surfaces.

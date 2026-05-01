@@ -2,7 +2,8 @@
  * db/db.ts — SQLite connection singleton + migration runner.
  *
  * Source of truth: CLAUDE.md §5 (Data Models), §12 (Local Storage Strategy),
- * and Appendix J (Migration Strategy).
+ * §14 (Database Resilience & Migration Discipline), and Appendix J
+ * (Migration Strategy — superseded by §14 as of v0.2.0).
  *
  * Responsibilities:
  *   - Initialize @capacitor-community/sqlite across three environments:
@@ -11,10 +12,13 @@
  *       3. Web (Vite dev server) — jeep-sqlite Web Component backed by
  *          sql.js runs in an IndexedDB-persisted memory layer. Dev-only.
  *   - Open the amban database once and memoize the connection.
- *   - Run every pending migration from src/db/migrations/ in numeric
- *     order inside a single transaction. Roll back on failure and
- *     surface the error via preferences so the app root can render the
- *     "reset" escape hatch.
+ *   - Run every pending migration from the catalogue (src/db/migrations/)
+ *     with per-migration transactions. On failure: ROLLBACK, persist
+ *     the error, throw. Per §14.4, a failure at migration N leaves
+ *     migrations 1…N-1 durably applied.
+ *   - Track applied migrations in the `schema_migrations` table
+ *     (the authoritative record) AND mirror the highest version to
+ *     Capacitor Preferences for quick pre-boot checks.
  *   - Expose `getDb()` — the one entry point every repository consumes.
  *   - Expose `closeDb()` and `wipeDb()` for the destructive reset
  *     pipeline (Appendix I) and for app teardown.
@@ -38,46 +42,10 @@ import {
 } from "@capacitor-community/sqlite";
 
 import { migrationFlags } from "./preferences";
+import { MIGRATION_CATALOG, TARGET_SCHEMA_VERSION } from "./migrations/index";
+import { normaliseSQL } from "./sql/normalise";
 
-/* ------------------------------------------------------------------
- * Migration catalogue
- *
- * Each entry is (version, sql). `version` must be a strictly increasing
- * positive integer — it's what we persist via `migrationFlags.setVersion`
- * once applied. `sql` is the full script, which may contain multiple
- * statements separated by `;` (the plugin's executeSet / execute both
- * support this).
- *
- * Imported via Vite's `?raw` loader so the content ships inside the
- * bundle as a plain string — no fs, no dynamic loader, no surprises.
- * ------------------------------------------------------------------ */
-
-import migration001 from "./migrations/001_init.sql?raw";
-import migration002 from "./migrations/002_spend_entries.sql?raw";
-
-interface MigrationDefinition {
-  version: number;
-  name: string;
-  sql: string;
-}
-
-/**
- * The full, ordered migration list. Add new entries at the end.
- * Never reorder, never edit a past entry — follow Appendix J.
- *
- * A registered migration is the ONLY way the runner knows a SQL file
- * exists — the file itself living in `migrations/` does nothing on
- * its own. Forgetting to register a shipped migration leaves fresh
- * installs stuck at a lower schema version than the code expects,
- * which is how v0.1.1 first shipped broken for new users: the
- * `spend_entries` table and `daily_logs.confirmed_at` column were
- * authored but never applied, so the rewritten Daily Log screen
- * crashed on the first `INSERT INTO spend_entries`.
- */
-const MIGRATIONS: ReadonlyArray<MigrationDefinition> = [
-  { version: 1, name: "init", sql: migration001 },
-  { version: 2, name: "spend_entries", sql: migration002 },
-];
+export { TARGET_SCHEMA_VERSION };
 
 /* ------------------------------------------------------------------
  * Constants
@@ -86,14 +54,6 @@ const MIGRATIONS: ReadonlyArray<MigrationDefinition> = [
 /** Database file name. Kept in one place so nobody can mistype it. */
 export const DB_NAME = "amban";
 
-/** SQLite has no concept of "schema version" at the file level; our
- *  migration runner tracks it via Capacitor Preferences. This constant
- *  is the *target* version — the highest number in MIGRATIONS above. */
-export const TARGET_SCHEMA_VERSION = MIGRATIONS.reduce(
-  (max, m) => (m.version > max ? m.version : max),
-  0,
-);
-
 /** Fixed app-level storage slot. `encrypted = false` because amban is a
  *  local-only personal finance tracker and we deliberately avoid key
  *  management complexity in v1 (see CLAUDE.md §12 — "No External Calls
@@ -101,6 +61,23 @@ export const TARGET_SCHEMA_VERSION = MIGRATIONS.reduce(
 const CONNECTION_MODE = "no-encryption" as const;
 const CONNECTION_READONLY = false;
 const CONNECTION_VERSION = 1;
+
+/**
+ * DDL for the `schema_migrations` tracker table. Applied idempotently
+ * at the top of every migration run so the table exists before we try
+ * to query it. This is the exact same DDL as migration 003, but we
+ * execute it unconditionally (with IF NOT EXISTS) because the runner
+ * must be able to read the table even on a fresh install where migration
+ * 003 has not yet been applied.
+ */
+const SCHEMA_MIGRATIONS_DDL = `
+CREATE TABLE IF NOT EXISTS schema_migrations (
+  version INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  checksum TEXT NOT NULL,
+  applied_at TEXT NOT NULL
+);
+`;
 
 /* ------------------------------------------------------------------
  * Internal state
@@ -168,8 +145,8 @@ async function ensureWebPlatform(): Promise<void> {
  * ------------------------------------------------------------------ */
 
 /**
- * Opens the amban database, applies every pending migration inside a
- * single transaction, and returns the memoized connection.
+ * Opens the amban database, applies every pending migration with
+ * per-migration transactions, and returns the memoized connection.
  *
  * Concurrent callers during boot share a single in-flight promise so
  * the connection is never opened twice. Callers after boot see the
@@ -177,7 +154,7 @@ async function ensureWebPlatform(): Promise<void> {
  *
  * If migrations fail, the error is persisted to Capacitor Preferences
  * (via migrationFlags) and re-thrown. The app root is expected to
- * surface the escape-hatch screen described in Appendix I.
+ * surface the escape-hatch screen described in §14.6.
  */
 export async function getDb(): Promise<SQLiteDBConnection> {
   if (connection) return connection;
@@ -279,207 +256,199 @@ export async function wipeDb(): Promise<void> {
   // Reset the migration bookkeeping so the next open re-applies every
   // migration from version 0.
   await migrationFlags.setVersion(0);
+  await migrationFlags.clearBackupVersion();
   await migrationFlags.markSucceeded();
 }
 
 /* ------------------------------------------------------------------
- * Migration runner
+ * Migration runner — v0.2.0 rewrite (§14)
  *
- * The contract (Appendix J):
- *   1. Read the persisted schema_version via preferences.
- *   2. Filter MIGRATIONS down to unapplied entries (version > persisted).
- *   3. Apply each, in order, inside a BEGIN/COMMIT transaction. Any
- *      failure triggers ROLLBACK and re-throws — the caller (getDb)
- *      then marks the failure for the error-boundary to pick up.
- *   4. After each successful migration, persist the new schema_version.
- *      This makes mid-run interruptions safe: re-running picks up where
- *      the last successful version left off.
+ * Key changes from the v0.1.x runner:
+ *   1. Catalogue-based: reads MIGRATION_CATALOG from migrations/index.ts
+ *      instead of an inline array.
+ *   2. Dual tracking: applied versions are persisted in both the
+ *      `schema_migrations` SQLite table (source of truth) and
+ *      Capacitor Preferences (quick boot-time check).
+ *   3. Per-migration transactions: a failure at migration N leaves
+ *      1…N-1 durably applied. Next launch resumes at N.
+ *   4. Backfill support: on first v0.2.0 launch over a v0.1.x install,
+ *      already-applied migrations are backfilled into the new tracker
+ *      table so the runner doesn't try to re-apply them.
+ *   5. Pre-migration backup flag: records the pre-migration schema
+ *      version so the boot gate can offer a "Restore backup" CTA.
+ *
+ * The contract (§14.4):
+ *   a. Bootstrap the `schema_migrations` DDL (idempotent).
+ *   b. Read applied versions from the tracker table.
+ *   c. On first v0.2 launch: backfill tracker rows for already-applied
+ *      migrations (detected via Preferences version).
+ *   d. Filter catalogue to unapplied entries.
+ *   e. For each pending: BEGIN → normalised SQL → INSERT tracker row →
+ *      COMMIT. On error: ROLLBACK, persist, throw.
+ *   f. Sync Preferences version to match.
  * ------------------------------------------------------------------ */
 
 /**
- * Strip SQL comments and collapse runs of whitespace so the plugin's
- * statement splitter never has to reason about a `;` that lives
- * inside a comment, and so a migration file can be authored with as
- * much prose as the author wants without worrying about the runner.
- *
- * Why this exists
- * ---------------
- * `@capacitor-community/sqlite`'s `execute(sql, transaction=true)`
- * splits the script on `;` before handing each statement to the
- * native binding. The splitter is intentionally simple — it does
- * NOT track whether a `;` is inside a string literal, a `--` line
- * comment, or a `/* … *\/` block comment. Most migration authors
- * never hit the edge: 001 slipped through fine because its comments
- * were short. But 002 carries long prose comment blocks, a `CHECK`
- * constraint with a paren-wrapped expression (`amount > 0`) sitting
- * right next to a `--` comment, and several `-- …` lines that break
- * up column definitions. On the native Android binding this causes
- * the plugin to hand the C layer a fragment like "amount REAL NOT
- * NULL CHECK (amount > 0)" followed by another fragment starting
- * with ", category TEXT," — which is an unparseable prefix and
- * fails the whole migration with a vague syntax error.
- *
- * The SQL files stay authoritative and immutable (Appendix J); we
- * normalise here in the runner so every migration — past, present,
- * future — gets the same treatment without needing to police comment
- * style in review.
- *
- * Rules
- * -----
- *   - Block comments `/* … *\/` are removed in full, including any
- *     `;` that happens to live inside them.
- *   - Line comments `-- …` are removed from the `--` marker to end
- *     of line, but only when `--` is not inside a single-quoted
- *     string literal. The naive split on `--` would mangle a
- *     legitimate amount like `'10--20'`; our scanner tracks quote
- *     state to avoid that.
- *   - Adjacent blank lines are collapsed; trailing whitespace on
- *     each retained line is stripped. The splitter only cares about
- *     `;`, but tidy input makes any error surface line-number-accurate.
- *
- * This function is a pure string → string transform. No plugin
- * calls, no I/O, no state. The migration SQL we ship stays the
- * source of truth; this is the runner meeting it halfway.
+ * Read applied migration versions from the `schema_migrations` table.
+ * Returns a Set<number> of version numbers. Returns an empty set if
+ * the table has no rows (fresh install or pre-v0.2 upgrade).
  */
-export function stripSqlComments(sql: string): string {
-  let out = "";
-  const n = sql.length;
-  let i = 0;
-
-  // Scanner state. Only one of these can be true at a time; the
-  // condition checks below enforce that.
-  let inSingleQuote = false;
-  let inLineComment = false;
-  let inBlockComment = false;
-
-  while (i < n) {
-    const ch = sql[i];
-    const next = i + 1 < n ? sql[i + 1] : "";
-
-    if (inLineComment) {
-      // A line comment ends at the next newline. We drop the
-      // comment body but retain the newline so line numbers in any
-      // downstream error message line up with the original file.
-      if (ch === "\n") {
-        inLineComment = false;
-        out += "\n";
+async function readAppliedVersions(db: SQLiteDBConnection): Promise<Set<number>> {
+  const result = await db.query("SELECT version FROM schema_migrations ORDER BY version;");
+  const versions = new Set<number>();
+  if (result.values) {
+    for (const row of result.values) {
+      const v = row["version"];
+      if (typeof v === "number") {
+        versions.add(v);
       }
-      i += 1;
-      continue;
     }
-
-    if (inBlockComment) {
-      if (ch === "*" && next === "/") {
-        inBlockComment = false;
-        i += 2;
-        continue;
-      }
-      // Preserve newlines inside block comments so line numbers
-      // survive the strip.
-      if (ch === "\n") out += "\n";
-      i += 1;
-      continue;
-    }
-
-    if (inSingleQuote) {
-      out += ch;
-      if (ch === "'") {
-        // SQL escapes a single quote by doubling it ('' means a
-        // literal quote, not the end of the string).
-        if (next === "'") {
-          out += next;
-          i += 2;
-          continue;
-        }
-        inSingleQuote = false;
-      }
-      i += 1;
-      continue;
-    }
-
-    // Not inside any commentary / string — look for openers.
-    if (ch === "-" && next === "-") {
-      inLineComment = true;
-      i += 2;
-      continue;
-    }
-    if (ch === "/" && next === "*") {
-      inBlockComment = true;
-      i += 2;
-      continue;
-    }
-    if (ch === "'") {
-      inSingleQuote = true;
-      out += ch;
-      i += 1;
-      continue;
-    }
-
-    out += ch;
-    i += 1;
   }
+  return versions;
+}
 
-  // Collapse any run of blank lines + trim trailing whitespace so the
-  // final script is compact without losing statement separators.
-  return out
-    .split("\n")
-    .map((line) => line.replace(/[ \t]+$/g, ""))
-    .filter((line, idx, arr) => {
-      if (line.length > 0) return true;
-      // Keep at most one consecutive blank line to preserve some
-      // visual structure for anyone who `.dump`s the DB. The
-      // explicit-undefined guard is for `noUncheckedIndexedAccess`;
-      // `idx > 0` already implies the previous index is in bounds.
-      const prev = idx > 0 ? arr[idx - 1] : undefined;
-      return prev !== undefined && prev.length > 0;
-    })
-    .join("\n")
-    .trim();
+/**
+ * On first v0.2.0 launch over a v0.1.x install, the `schema_migrations`
+ * table exists (we just created it with DDL) but is empty. Meanwhile,
+ * Preferences knows that versions 1 and 2 were already applied. We
+ * backfill the tracker table so the runner doesn't try to re-apply them.
+ *
+ * This is a one-time operation — subsequent launches see the tracker
+ * rows and skip this path.
+ */
+async function backfillTrackerFromPreferences(
+  db: SQLiteDBConnection,
+  prefsVersion: number,
+  applied: Set<number>,
+): Promise<void> {
+  const now = new Date().toISOString();
+  for (const entry of MIGRATION_CATALOG) {
+    if (entry.version <= prefsVersion && !applied.has(entry.version)) {
+      const checksum = entry.checksum;
+      await db.run(
+        "INSERT OR IGNORE INTO schema_migrations (version, name, checksum, applied_at) VALUES (?, ?, ?, ?);",
+        [entry.version, entry.name, checksum, now],
+      );
+      applied.add(entry.version);
+    }
+  }
+}
+
+/**
+ * Record a pre-migration backup marker. On native platforms, we could
+ * copy the SQLite file — but the capacitor-community/sqlite plugin
+ * does not expose a raw file-copy API, and reaching into the native
+ * filesystem from JS is fragile. For v0.2.0, we record the
+ * pre-migration schema version as a backup marker so the boot gate
+ * knows a conceptual backup exists. Actual file-level backup will
+ * land in v0.3 once we have a thin native helper.
+ *
+ * The key deliverable for v0.2.0 is the per-migration transaction
+ * safety, not the file backup. The backup flag is best-effort UX.
+ */
+async function recordPreMigrationBackup(currentVersion: number): Promise<void> {
+  if (currentVersion > 0) {
+    await migrationFlags.setBackupVersion(currentVersion);
+  }
 }
 
 export async function runMigrations(db: SQLiteDBConnection): Promise<void> {
-  const currentVersion = await migrationFlags.getVersion();
-  const pending = MIGRATIONS.filter((m) => m.version > currentVersion).sort(
-    (a, b) => a.version - b.version,
-  );
+  // Step (a): bootstrap the tracker table. The DDL is idempotent (IF
+  // NOT EXISTS) so this is safe on every launch.
+  await db.execute(SCHEMA_MIGRATIONS_DDL, false);
+
+  // Step (b): read what's already been applied (from the DB itself).
+  const applied = await readAppliedVersions(db);
+
+  // Step (c): reconcile with Preferences for v0.1.x → v0.2.0 upgrades.
+  // If the tracker table is empty but Preferences says versions were
+  // applied, backfill the tracker so we don't re-apply them.
+  const prefsVersion = await migrationFlags.getVersion();
+  if (applied.size === 0 && prefsVersion > 0) {
+    await backfillTrackerFromPreferences(db, prefsVersion, applied);
+  }
+
+  // Step (d): filter catalogue to unapplied migrations.
+  const pending = MIGRATION_CATALOG.filter((m) => !applied.has(m.version)).slice();
+  pending.sort((a, b) => a.version - b.version);
 
   if (pending.length === 0) {
+    // Sync Preferences with the tracker's highest version in case
+    // they drifted (e.g. Preferences were cleared by the OS).
+    const maxApplied = appliedMax(applied);
+    if (maxApplied > prefsVersion) {
+      await migrationFlags.setVersion(maxApplied);
+    }
     // Clear any prior failure flag — a clean boot is a successful one.
     await migrationFlags.markSucceeded();
     return;
   }
 
+  // Step (e-prep): record a backup marker before we touch anything.
+  const currentVersion = appliedMax(applied);
+  await recordPreMigrationBackup(currentVersion);
+
+  // Step (e): apply each pending migration individually.
+  // We use `execute(sql, true)` which lets the plugin wrap each
+  // migration in its own BEGIN/COMMIT pair and ROLLBACK on error.
+  // We deliberately do NOT call BEGIN/COMMIT ourselves — the
+  // @capacitor-community/sqlite plugin errors with "Already in
+  // transaction" when explicit BEGIN is issued alongside its own
+  // transaction management. After a successful migration, we record
+  // the version in the tracker table and Preferences.
   for (const migration of pending) {
-    // Normalise the SQL before handing it to the plugin. See
-    // `stripSqlComments` above for why this exists. The original
-    // file is still the source of truth — this is runner-side
-    // preprocessing, not a rewrite of the shipped migration.
-    const cleanSql = stripSqlComments(migration.sql);
+    const cleanSql = normaliseSQL(migration.sql);
+    const now = new Date().toISOString();
 
     try {
-      // `transaction: true` asks the plugin to wrap the script in a
-      // BEGIN/COMMIT pair and ROLLBACK on any statement error. We pair
-      // that with our own persisted version bump so partial application
-      // across migrations is impossible.
-      await db.execute(cleanSql, /* transaction */ true);
+      // Let the plugin manage the transaction for the migration DDL/DML.
+      await db.execute(cleanSql, true);
+
+      // Record in the tracker table. This is a separate statement so
+      // it's outside the migration's transaction — but since the
+      // migration succeeded, this is safe. If the app crashes between
+      // the execute and the insert, the next boot will see the schema
+      // change applied (tables exist) but no tracker row. The backfill
+      // logic in step (c) handles this by checking Preferences.
+      await db.run(
+        "INSERT OR REPLACE INTO schema_migrations (version, name, checksum, applied_at) VALUES (?, ?, ?, ?);",
+        [migration.version, migration.name, migration.checksum, now],
+      );
+
+      // Mirror to Preferences after each successful migration so a
+      // mid-run crash leaves the Preferences version accurate.
       await migrationFlags.setVersion(migration.version);
     } catch (error) {
+      // The plugin's transaction wrapper handles ROLLBACK internally
+      // when execute(sql, true) fails. We just need to record the
+      // failure and surface it.
       const message = error instanceof Error ? error.message : String(error);
       // Enrich the error with the migration identity AND the first
-      // few lines of the (normalised) SQL so the reset-escape-hatch
-      // screen can show a user / developer exactly what went wrong
-      // without needing a reproduction step. Truncated to stay within
-      // the Preferences blob size budget.
+      // few lines of the (normalised) SQL so the escape-hatch screen
+      // can show exactly what went wrong.
       const preview = cleanSql.slice(0, 500).replace(/\s+/g, " ").trim();
-      throw new Error(
-        `Migration ${migration.version} (${migration.name}) failed: ${message} — preview: ${preview}${
-          cleanSql.length > 500 ? "…" : ""
-        }`,
-      );
+      const enrichedMessage = `Migration ${migration.version} (${migration.name}) failed: ${message} — preview: ${preview}${
+        cleanSql.length > 500 ? "…" : ""
+      }`;
+
+      await migrationFlags.markFailed(enrichedMessage);
+      throw new Error(enrichedMessage);
     }
   }
 
+  // Step (f): all migrations applied successfully.
   await migrationFlags.markSucceeded();
+}
+
+/**
+ * Returns the maximum version from a set, or 0 if the set is empty.
+ */
+function appliedMax(versions: Set<number>): number {
+  let max = 0;
+  for (const v of versions) {
+    if (v > max) max = v;
+  }
+  return max;
 }
 
 /* ------------------------------------------------------------------

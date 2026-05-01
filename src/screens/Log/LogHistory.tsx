@@ -27,9 +27,12 @@ import { format, parseISO, startOfWeek } from "date-fns";
 
 import BottomSheet from "../../components/ui/BottomSheet";
 import CurrencyInput from "../../components/ui/CurrencyInput";
+import AddIncomeSheet from "./AddIncomeSheet";
 
 import { useDailyStore } from "../../stores/dailyStore";
 import type { DailyLog, SpendEntry } from "../../stores/dailyStore";
+import { useFinanceStore } from "../../stores/financeStore";
+import type { ManualCredit } from "../../stores/financeStore";
 import { CATEGORY_BY_KEY } from "../../constants/categories";
 
 import { Icons, CATEGORY_ICONS } from "../../theme/icons";
@@ -68,14 +71,33 @@ function toneForLog(log: DailyLog): LogTone {
 interface WeekGroup {
   weekStart: Date;
   label: string;
-  logs: DailyLog[];
+  items: TimelineItem[];
   totalSpent: number;
+  totalCredits: number;
 }
 
-function groupByWeek(logs: DailyLog[]): WeekGroup[] {
+/** A single item in the unified spend + income timeline. */
+type TimelineItem = { kind: "spend"; log: DailyLog } | { kind: "credit"; credit: ManualCredit };
+
+/** ISO date for a timeline item (used for sorting and grouping). */
+function itemDate(item: TimelineItem): string {
+  return item.kind === "spend" ? item.log.logDate : item.credit.creditedAt;
+}
+
+/** Stable unique key for React rendering. */
+function itemKey(item: TimelineItem): string {
+  return item.kind === "spend" ? `spend-${item.log.id}` : `credit-${item.credit.id}`;
+}
+
+function groupByWeek(logs: DailyLog[], credits: ManualCredit[] = []): WeekGroup[] {
+  const allItems: TimelineItem[] = [
+    ...logs.map((log): TimelineItem => ({ kind: "spend", log })),
+    ...credits.map((credit): TimelineItem => ({ kind: "credit", credit })),
+  ];
+
   const buckets = new Map<string, WeekGroup>();
-  for (const log of logs) {
-    const d = parseISO(log.logDate);
+  for (const item of allItems) {
+    const d = parseISO(itemDate(item));
     const start = startOfWeek(d, { weekStartsOn: 1 }); // Monday, per Indian convention
     const key = format(start, "yyyy-MM-dd");
     let group = buckets.get(key);
@@ -83,15 +105,34 @@ function groupByWeek(logs: DailyLog[]): WeekGroup[] {
       group = {
         weekStart: start,
         label: `Week of ${format(start, "d MMM")}`,
-        logs: [],
+        items: [],
         totalSpent: 0,
+        totalCredits: 0,
       };
       buckets.set(key, group);
     }
-    group.logs.push(log);
-    group.totalSpent += log.spent;
+    group.items.push(item);
+    if (item.kind === "spend") {
+      group.totalSpent += item.log.spent;
+    } else {
+      group.totalCredits += item.credit.amount;
+    }
   }
-  return Array.from(buckets.values()).sort((a, b) => b.weekStart.getTime() - a.weekStart.getTime());
+
+  // Sort groups newest-first, items within each group by date descending.
+  const sorted = Array.from(buckets.values()).sort(
+    (a, b) => b.weekStart.getTime() - a.weekStart.getTime(),
+  );
+  for (const group of sorted) {
+    group.items.sort((a, b) => {
+      const cmp = itemDate(b).localeCompare(itemDate(a));
+      if (cmp !== 0) return cmp;
+      // Same date: credits sort before spends so income appears above.
+      if (a.kind !== b.kind) return a.kind === "credit" ? -1 : 1;
+      return 0;
+    });
+  }
+  return sorted;
 }
 
 /**
@@ -145,16 +186,32 @@ const LogHistory: React.FC = () => {
   const fetchLogs = useDailyStore((s) => s.fetchLogs);
   const loadedDays = useDailyStore((s) => s.loadedDays);
 
-  const [expandedId, setExpandedId] = useState<number | null>(null);
+  const manualCredits = useFinanceStore((s) => s.manualCredits);
+  const deleteManualCredit = useFinanceStore((s) => s.deleteManualCredit);
+
+  const [expandedKey, setExpandedKey] = useState<string | null>(null);
   const [editing, setEditing] = useState<EditDraft | null>(null);
+  const [editingCredit, setEditingCredit] = useState<ManualCredit | null>(null);
   const [busy, setBusy] = useState(false);
 
   const chartData = useMemo(() => buildChartSeries(logs), [logs]);
-  const weeks = useMemo(() => groupByWeek(logs), [logs]);
+  const weeks = useMemo(() => groupByWeek(logs, manualCredits), [logs, manualCredits]);
 
-  const handleExpand = (id: number) => {
+  const handleExpand = (key: string) => {
     void haptics.selection();
-    setExpandedId((prev) => (prev === id ? null : id));
+    setExpandedKey((prev) => (prev === key ? null : key));
+  };
+
+  const handleCreditDelete = async (credit: ManualCredit) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await deleteManualCredit(credit.id);
+      void haptics.error();
+      setExpandedKey(null);
+    } finally {
+      setBusy(false);
+    }
   };
 
   const handleEdit = (log: DailyLog) => {
@@ -346,6 +403,31 @@ const LogHistory: React.FC = () => {
             </article>
           ) : null}
 
+          {/* Income hint — shown once when no manual credits exist */}
+          {hydrated && manualCredits.length === 0 && logs.length > 0 ? (
+            <div
+              role="note"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "var(--space-sm)",
+                padding: "var(--space-md)",
+                borderRadius: "var(--radius-md)",
+                backgroundColor: "rgba(30, 140, 69, 0.08)",
+                fontSize: "var(--text-caption)",
+                color: "var(--color-score-excellent)",
+                lineHeight: "var(--line-height-body)",
+              }}
+            >
+              <IonIcon
+                icon={Icons.finance.cash}
+                aria-hidden="true"
+                style={{ flexShrink: 0, fontSize: 18 }}
+              />
+              Got a freelance payment or refund? Tap "+ Add income" on the Log tab.
+            </div>
+          ) : null}
+
           {/* Weekly-grouped list */}
           {weeks.map((week) => (
             <section
@@ -376,21 +458,192 @@ const LogHistory: React.FC = () => {
                 </h2>
                 <span
                   style={{
+                    display: "inline-flex",
+                    alignItems: "baseline",
+                    gap: "var(--space-sm)",
                     fontSize: "var(--text-caption)",
                     color: "var(--text-muted)",
                     fontVariantNumeric: "tabular-nums",
                   }}
                 >
+                  {week.totalCredits > 0 ? (
+                    <span style={{ color: "var(--color-score-excellent)" }}>
+                      +{formatINR(week.totalCredits)}
+                    </span>
+                  ) : null}
                   {formatINR(week.totalSpent)}
                 </span>
               </header>
-              {week.logs.map((log) => {
+
+              {week.items.map((item) => {
+                if (item.kind === "credit") {
+                  const credit = item.credit;
+                  const key = itemKey(item);
+                  const expanded = expandedKey === key;
+                  return (
+                    <article
+                      key={key}
+                      aria-label={`Income: ${credit.label}, ${formatINR(credit.amount)}`}
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: "var(--space-xs)",
+                        padding: "var(--space-md)",
+                        borderRadius: "var(--radius-md)",
+                        backgroundColor: "var(--surface-raised)",
+                        boxShadow: "var(--shadow-card)",
+                        borderLeft: "3px solid var(--color-score-excellent)",
+                      }}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => handleExpand(key)}
+                        aria-expanded={expanded}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          gap: "var(--space-sm)",
+                          width: "100%",
+                          background: "transparent",
+                          border: "none",
+                          padding: 0,
+                          cursor: "pointer",
+                          color: "inherit",
+                          minHeight: 0,
+                        }}
+                      >
+                        <div
+                          style={{ display: "flex", alignItems: "center", gap: "var(--space-sm)" }}
+                        >
+                          <span
+                            aria-hidden="true"
+                            style={{
+                              width: 10,
+                              height: 10,
+                              borderRadius: "var(--radius-pill)",
+                              backgroundColor: "var(--color-score-excellent)",
+                              flexShrink: 0,
+                            }}
+                          />
+                          <div style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
+                            <span
+                              style={{
+                                fontSize: "var(--text-body)",
+                                fontWeight: "var(--font-weight-semibold)",
+                                color: "var(--text-strong)",
+                              }}
+                            >
+                              {credit.label}
+                            </span>
+                            <span
+                              style={{
+                                fontSize: "var(--text-caption)",
+                                color: "var(--text-muted)",
+                              }}
+                            >
+                              {formatDateLabel(credit.creditedAt)}
+                            </span>
+                          </div>
+                        </div>
+                        <span
+                          style={{
+                            fontFamily: "var(--font-display)",
+                            fontSize: "var(--text-h3)",
+                            fontWeight: "var(--font-weight-semibold)",
+                            color: "var(--color-score-excellent)",
+                            fontVariantNumeric: "tabular-nums",
+                          }}
+                        >
+                          +{formatINR(credit.amount)}
+                        </span>
+                      </button>
+
+                      {expanded ? (
+                        <div
+                          style={{
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: "var(--space-xs)",
+                            paddingTop: "var(--space-sm)",
+                            borderTop: "1px solid var(--divider)",
+                          }}
+                        >
+                          <span
+                            style={{
+                              fontSize: "var(--text-caption)",
+                              color: "var(--text-muted)",
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: 4,
+                            }}
+                          >
+                            <IonIcon icon={Icons.finance.cash} aria-hidden="true" />
+                            Manual income credit
+                          </span>
+                          <div
+                            style={{
+                              display: "flex",
+                              gap: "var(--space-sm)",
+                              marginTop: "var(--space-xs)",
+                            }}
+                          >
+                            <button
+                              type="button"
+                              onClick={() => setEditingCredit(credit)}
+                              style={{
+                                minHeight: 36,
+                                padding: "var(--space-xs) var(--space-md)",
+                                borderRadius: "var(--radius-md)",
+                                backgroundColor: "rgba(30, 140, 69, 0.12)",
+                                color: "var(--color-score-excellent)",
+                                border: "none",
+                                fontSize: "var(--text-caption)",
+                                fontWeight: "var(--font-weight-semibold)",
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: 4,
+                              }}
+                            >
+                              <IonIcon icon={Icons.action.edit} aria-hidden="true" />
+                              Edit
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void handleCreditDelete(credit)}
+                              style={{
+                                minHeight: 36,
+                                padding: "var(--space-xs) var(--space-md)",
+                                borderRadius: "var(--radius-md)",
+                                backgroundColor: "transparent",
+                                color: "var(--color-score-warning)",
+                                border: "1px solid var(--divider)",
+                                fontSize: "var(--text-caption)",
+                                fontWeight: "var(--font-weight-semibold)",
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: 4,
+                              }}
+                            >
+                              <IonIcon icon={Icons.action.delete} aria-hidden="true" />
+                              Delete
+                            </button>
+                          </div>
+                        </div>
+                      ) : null}
+                    </article>
+                  );
+                }
+
+                // kind === "spend"
+                const log = item.log;
                 const tone = toneForLog(log);
-                const expanded = expandedId === log.id;
+                const key = itemKey(item);
+                const expanded = expandedKey === key;
                 const category = log.category ? CATEGORY_BY_KEY[log.category] : null;
                 return (
                   <article
-                    key={log.id}
+                    key={key}
                     aria-label={`${formatDateLabel(log.logDate)}, spent ${formatINR(log.spent)}`}
                     style={{
                       display: "flex",
@@ -404,7 +657,7 @@ const LogHistory: React.FC = () => {
                   >
                     <button
                       type="button"
-                      onClick={() => handleExpand(log.id)}
+                      onClick={() => handleExpand(key)}
                       aria-expanded={expanded}
                       style={{
                         display: "flex",
@@ -662,6 +915,13 @@ const LogHistory: React.FC = () => {
             {busy ? "Saving…" : "Save"}
           </button>
         </BottomSheet>
+
+        <AddIncomeSheet
+          isOpen={editingCredit != null}
+          onDismiss={() => setEditingCredit(null)}
+          editCredit={editingCredit ?? undefined}
+          onSaved={() => setEditingCredit(null)}
+        />
       </IonContent>
     </IonPage>
   );

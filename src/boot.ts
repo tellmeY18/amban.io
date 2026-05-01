@@ -43,9 +43,11 @@
  */
 
 import { getDb, getMigrationError, isMigrationFailed } from "./db/db";
+import { migrationFlags } from "./db/preferences";
 import { useDailyStore } from "./stores/dailyStore";
 import { useFinanceStore } from "./stores/financeStore";
 import { useSettingsStore } from "./stores/settingsStore";
+import { useSmsSuggestionsStore } from "./stores/smsSuggestionsStore";
 import { useUserStore } from "./stores/userStore";
 
 /**
@@ -101,6 +103,12 @@ export interface BootResult {
   stages: {
     database: boolean;
     hydration: boolean;
+    /**
+     * True when a pre-migration backup marker exists (§14.5). When
+     * stage is MigrationFailed and this flag is true, the UI should
+     * show a "Restore backup" CTA alongside Retry and Reset App.
+     */
+    restoreBackupAvailable: boolean;
   };
 }
 
@@ -117,6 +125,7 @@ function initialResult(): BootResult {
     stages: {
       database: false,
       hydration: false,
+      restoreBackupAvailable: false,
     },
   };
 }
@@ -160,6 +169,9 @@ async function runDatabaseStage(result: BootResult): Promise<boolean> {
     const prior = await getMigrationError();
     result.stage = BootStage.MigrationFailed;
     result.error = prior ?? "Migrations previously failed. Reset the app to start fresh.";
+    // Check if a backup marker exists so the UI can show "Restore backup".
+    const backupVersion = await migrationFlags.getBackupVersion();
+    result.stages.restoreBackupAvailable = backupVersion > 0;
     return false;
   }
 
@@ -170,6 +182,14 @@ async function runDatabaseStage(result: BootResult): Promise<boolean> {
   } catch (error) {
     result.stage = BootStage.MigrationFailed;
     result.error = messageOf(error);
+    // Check backup marker even on a fresh failure — the runner records
+    // a marker before applying any pending migration.
+    try {
+      const backupVersion = await migrationFlags.getBackupVersion();
+      result.stages.restoreBackupAvailable = backupVersion > 0;
+    } catch {
+      // Preferences read failed — leave the flag false.
+    }
     return false;
   }
 }
@@ -198,6 +218,7 @@ async function runHydrationStage(result: BootResult): Promise<boolean> {
       useUserStore.getState().hydrate(),
       useFinanceStore.getState().hydrate(),
       useDailyStore.getState().hydrate(),
+      useSmsSuggestionsStore.getState().hydrate(),
     ]);
     result.stages.hydration = true;
     return true;
@@ -267,6 +288,7 @@ export function isFullyHydrated(): boolean {
     useSettingsStore.getState().hydrated &&
     useUserStore.getState().hydrated &&
     useFinanceStore.getState().hydrated &&
-    useDailyStore.getState().hydrated
+    useDailyStore.getState().hydrated &&
+    useSmsSuggestionsStore.getState().hydrated
   );
 }

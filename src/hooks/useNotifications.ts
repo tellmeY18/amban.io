@@ -13,6 +13,7 @@
  *       2000–2999   — upcoming recurring payment reminders (2000 + payment.id)
  *       3000–3999   — salary day nudges (3000 + incomeSource.id)
  *       4000–4999   — reserved (future, e.g. month-end summary)
+ *       9999        — test-fire (dev diagnostics, outside normal ranges)
  *   - Always cancel the full ID range before rescheduling, so stale
  *     entries never survive an edit.
  *   - Reschedule after: onboarding completion, any edit to income /
@@ -24,6 +25,26 @@
  *   - Surface the OS permission state so the UI can render a "fix it"
  *     affordance when notifications are toggled on but permission is
  *     denied.
+ *
+ * Boot-completed re-registration (Android):
+ *   `RECEIVE_BOOT_COMPLETED` is declared in the AndroidManifest.xml.
+ *   Capacitor's local-notifications plugin registers a BootReceiver
+ *   that re-schedules pending alarms after a device reboot. If we
+ *   discover the plugin does NOT handle this, we will need to add a
+ *   custom BroadcastReceiver in
+ *   `android/app/src/main/java/io/amban/app/BootReceiver.java`
+ *   that calls back into the WebView to trigger `rescheduleAll()`.
+ *   For v0.2.0 we rely on the plugin's built-in behaviour and verify
+ *   via the schedule-verification diagnostic.
+ *
+ * Android 13+ POST_NOTIFICATIONS permission:
+ *   Starting with API 33 (Android 13), apps must request the runtime
+ *   permission `android.permission.POST_NOTIFICATIONS` before local
+ *   notifications will display. Capacitor's plugin wraps this via
+ *   `requestPermissions()`. We track whether we've already asked via
+ *   the `amban.notifications_runtime_asked` Preferences key so that
+ *   upgrading users who completed onboarding before v0.2.0 get a
+ *   one-time automatic permission request on first launch.
  *
  * Design rules:
  *   - Pure plumbing — no React UI. Screens consume the returned
@@ -48,6 +69,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Capacitor } from "@capacitor/core";
 import { LocalNotifications } from "@capacitor/local-notifications";
 import type { LocalNotificationSchema, PermissionStatus } from "@capacitor/local-notifications";
+
+import { Preferences } from "@capacitor/preferences";
 
 import { PreferenceKey, prefs } from "../db/preferences";
 import { useFinanceStore } from "../stores/financeStore";
@@ -77,10 +100,24 @@ export interface UseNotificationsResult {
   requestPermission: () => Promise<NotificationPermission>;
   /** Cancel everything in our ID ranges, then re-schedule from store state. */
   rescheduleAll: () => Promise<void>;
+  /**
+   * Force a full reschedule, bypassing the fingerprint dedupe. Useful
+   * for diagnostics and the dev-only "force reschedule" button.
+   */
+  forceRescheduleAll: () => Promise<void>;
   /** Cancel everything in our ID ranges. Does not flip the master toggle. */
   cancelAll: () => Promise<void>;
   /** Open the OS settings page for the app (best-effort). */
   openSystemSettings: () => Promise<void>;
+  /** Whether the last reschedule was verified (daily prompt is pending). */
+  lastScheduleVerified: boolean;
+  /** Number of amban notifications currently pending in the OS. */
+  scheduledCount: number;
+  /**
+   * Fire a test notification in ~10 seconds (ID 9999, outside normal
+   * ranges). Intended for dev/QA diagnostics only.
+   */
+  testFireNotification: () => Promise<void>;
 }
 
 /* ------------------------------------------------------------------
@@ -122,6 +159,9 @@ const DAILY_TEMPLATES: ReadonlyArray<(name: string) => string> = [
   () => "Quick question — what did today cost you? 💸",
   () => "Don't lose track! Log today's spend before you sleep. 🌙",
   () => "Your amban score is waiting. What did you spend today? 📱",
+  () => "Time to close the books! How much did today cost? 📝",
+  () => "Before you call it a night — what did you spend today? 💭",
+  () => "Your future self thanks you for logging today. How much? 🙏",
 ];
 
 function pickDailyTemplate(name: string, today: Date): string {
@@ -299,21 +339,63 @@ async function cancelAmbanScheduled(): Promise<void> {
  * Kept pure (no plugin calls) so tests — if we grow them — can assert
  * on the payload shape directly.
  */
+/** ID used by the test-fire diagnostic. Outside all normal ranges. */
+const TEST_FIRE_ID = 9999;
+
+/** Preferences key for persisting schedule verification result. */
+const SCHEDULE_VERIFIED_KEY = "amban.last_schedule_verified" as PreferenceKey;
+
+/**
+ * Verify that the daily prompt notification is actually registered in
+ * the OS pending list. Returns true when confirmed, false when the
+ * daily prompt is missing or the plugin call fails.
+ *
+ * This is the schedule-verification diagnostic: if the OS or an
+ * aggressive OEM silently dropped our alarm, we'll know on the next
+ * app resume and can surface the issue in the diagnostics section.
+ */
+async function verifySchedule(): Promise<{ verified: boolean; count: number }> {
+  if (!isNative()) return { verified: true, count: 0 };
+  try {
+    const pending = await LocalNotifications.getPending();
+    const ours = (pending?.notifications ?? []).filter((n) => isAmbanNotificationId(n.id));
+    const dailyExists = ours.some((n) => n.id === DAILY_PROMPT_ID);
+    if (!dailyExists) {
+      console.warn("[amban.notifications] Daily prompt not found in pending notifications");
+    }
+    return { verified: dailyExists, count: ours.length };
+  } catch {
+    return { verified: false, count: 0 };
+  }
+}
+
 function buildScheduledSet(inputs: ScheduleInputs): LocalNotificationSchema[] {
   const out: LocalNotificationSchema[] = [];
   const today = todayLocalStartOfDay();
 
-  // Daily prompt — recurring at the chosen hour/minute.
+  // Daily prompt — one-shot exact alarm at the next occurrence of
+  // the configured time. One-shot alarms use setExactAndAllowWhileIdle()
+  // on Android, which survives Doze mode and process kills — unlike
+  // repeating alarms which use setInexactRepeating() and are subject
+  // to OS batching and OEM killing. The app reschedules the next
+  // day's alarm on every foreground resume and cold start.
   const [hourRaw, minuteRaw] = inputs.notificationTime.split(":");
   const hour = Number(hourRaw);
   const minute = Number(minuteRaw);
   if (Number.isInteger(hour) && Number.isInteger(minute)) {
+    const now = new Date();
+    const fireAt = new Date(today);
+    fireAt.setHours(hour, minute, 0, 0);
+    // If the target time has already passed today, schedule for tomorrow.
+    if (fireAt.getTime() <= now.getTime()) {
+      fireAt.setDate(fireAt.getDate() + 1);
+    }
     out.push({
       id: DAILY_PROMPT_ID,
       title: "amban",
-      body: pickDailyTemplate(inputs.name, today),
+      body: pickDailyTemplate(inputs.name, fireAt),
       schedule: {
-        on: { hour, minute },
+        at: fireAt,
         allowWhileIdle: true,
       },
       extra: { target: "log" },
@@ -369,10 +451,14 @@ export function useNotifications(): UseNotificationsResult {
   const incomeSources = useFinanceStore((s) => s.incomeSources);
   const recurringPayments = useFinanceStore((s) => s.recurringPayments);
   const name = useUserStore((s) => s.name);
+  const onboardingComplete = useUserStore((s) => s.onboardingComplete);
 
   const [permission, setPermission] = useState<NotificationPermission>("unknown");
   const [lastError, setLastError] = useState<string | null>(null);
+  const [lastScheduleVerified, setLastScheduleVerified] = useState(true);
+  const [scheduledCount, setScheduledCount] = useState(0);
   const lastFingerprintRef = useRef<string | null>(null);
+  const upgradePermissionCheckedRef = useRef(false);
 
   /* ----- Permission bootstrap ------------------------------------- */
 
@@ -409,6 +495,10 @@ export function useNotifications(): UseNotificationsResult {
       if (mapped === "granted") {
         await prefs.setBool(PreferenceKey.NotificationsPermissionGranted, true);
       }
+      // Record that we've asked for runtime permission (Android 13+).
+      // Uses the string literal to avoid merge conflicts with the
+      // agent adding PreferenceKey.NotificationsRuntimeAsked.
+      await Preferences.set({ key: "amban.notifications_runtime_asked", value: "1" });
       return mapped;
     } catch (e) {
       console.warn("[amban.notifications] requestPermissions failed:", e);
@@ -416,6 +506,32 @@ export function useNotifications(): UseNotificationsResult {
       return "unknown";
     }
   }, []);
+
+  /* ----- Android 13+ upgrade permission flow ---------------------- */
+
+  // Users who completed onboarding before v0.2.0 may not have been
+  // asked for the POST_NOTIFICATIONS runtime permission (introduced
+  // in Android 13 / API 33). On first launch of v0.2.0+, if the user
+  // is past onboarding but we haven't recorded an ask, trigger the
+  // permission flow automatically once.
+  useEffect(() => {
+    if (!isNative() || upgradePermissionCheckedRef.current) return;
+    if (!onboardingComplete) return;
+    upgradePermissionCheckedRef.current = true;
+
+    void (async () => {
+      const { value: alreadyAsked } = await Preferences.get({
+        key: "amban.notifications_runtime_asked",
+      });
+      if (alreadyAsked === "1") return;
+
+      // Haven't asked yet — this is an upgrading user. Trigger the
+      // permission flow. Even if they deny, we record the ask so we
+      // don't nag on every subsequent launch.
+      console.info("[amban.notifications] Upgrading user detected — requesting POST_NOTIFICATIONS");
+      await requestPermission();
+    })();
+  }, [onboardingComplete, requestPermission]);
 
   /* ----- Scheduler ------------------------------------------------ */
 
@@ -453,7 +569,17 @@ export function useNotifications(): UseNotificationsResult {
     const fingerprint = `${todayIso}|${fingerprintInputs(inputs)}`;
     const stored = await prefs.getString(FINGERPRINT_KEY, null);
     if (stored === fingerprint && lastFingerprintRef.current === fingerprint) {
-      return;
+      // Even if the fingerprint matches today's stored value, we must
+      // reschedule if the daily prompt has already fired (it was a
+      // one-shot alarm and is no longer in the pending list). Without
+      // this, the user wouldn't get tomorrow's notification.
+      const verification = await verifySchedule();
+      if (verification.verified) {
+        // Daily prompt is still pending — nothing to do.
+        return;
+      }
+      // Daily prompt has already fired or was dropped — fall through
+      // to reschedule the next occurrence.
     }
 
     // Ensure permission before we attempt to schedule — a denied
@@ -474,12 +600,30 @@ export function useNotifications(): UseNotificationsResult {
       }
       lastFingerprintRef.current = fingerprint;
       await prefs.setString(FINGERPRINT_KEY, fingerprint);
+
+      // Post-schedule verification — confirm the daily prompt landed.
+      const verification = await verifySchedule();
+      setLastScheduleVerified(verification.verified);
+      setScheduledCount(verification.count);
+      await prefs.setString(SCHEDULE_VERIFIED_KEY, verification.verified ? "1" : "0");
+      if (!verification.verified) {
+        console.warn(
+          "[amban.notifications] Schedule verification failed: daily prompt missing from pending list",
+        );
+      }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       console.warn("[amban.notifications] schedule failed:", msg);
       setLastError(msg);
     }
   }, [refreshPermission]);
+
+  const forceRescheduleAll = useCallback(async () => {
+    // Bypass the fingerprint dedupe by clearing it first.
+    lastFingerprintRef.current = null;
+    await prefs.remove(FINGERPRINT_KEY);
+    await rescheduleAll();
+  }, [rescheduleAll]);
 
   /* ----- Auto-reschedule on input change -------------------------- */
 
@@ -498,6 +642,29 @@ export function useNotifications(): UseNotificationsResult {
     recurringPayments,
     name,
   ]);
+
+  /* ----- Test-fire (dev diagnostics) ------------------------------- */
+
+  const testFireNotification = useCallback(async () => {
+    if (!isNative()) return;
+    try {
+      await LocalNotifications.schedule({
+        notifications: [
+          {
+            id: TEST_FIRE_ID,
+            title: "amban.io (test)",
+            body: "This is a test notification. If you see this, notifications work! 🎉",
+            schedule: { at: new Date(Date.now() + 10_000) },
+            extra: { target: "log" },
+          },
+        ],
+      });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.warn("[amban.notifications] test-fire failed:", msg);
+      setLastError(msg);
+    }
+  }, []);
 
   /* ----- Open system settings ------------------------------------- */
 
@@ -527,7 +694,11 @@ export function useNotifications(): UseNotificationsResult {
     lastError,
     requestPermission,
     rescheduleAll,
+    forceRescheduleAll,
     cancelAll,
     openSystemSettings,
+    lastScheduleVerified,
+    scheduledCount,
+    testFireNotification,
   };
 }
