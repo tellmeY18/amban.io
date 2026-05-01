@@ -76,8 +76,20 @@ function formatShortTime(isoString: string): string {
 
     // Older than 24h — show date + time
     const day = date.getDate();
-    const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
-      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const monthNames = [
+      "Jan",
+      "Feb",
+      "Mar",
+      "Apr",
+      "May",
+      "Jun",
+      "Jul",
+      "Aug",
+      "Sep",
+      "Oct",
+      "Nov",
+      "Dec",
+    ];
     const month = monthNames[date.getMonth()];
     const hours = date.getHours();
     const minutes = date.getMinutes().toString().padStart(2, "0");
@@ -100,11 +112,7 @@ interface SuggestionCardProps {
   onDismiss: (id: number) => void;
 }
 
-const SuggestionCard: React.FC<SuggestionCardProps> = ({
-  suggestion,
-  onAccept,
-  onDismiss,
-}) => {
+const SuggestionCard: React.FC<SuggestionCardProps> = ({ suggestion, onAccept, onDismiss }) => {
   const isDebit = suggestion.direction === "debit";
 
   return (
@@ -137,20 +145,14 @@ const SuggestionCard: React.FC<SuggestionCardProps> = ({
             width: 32,
             height: 32,
             borderRadius: "var(--radius-pill)",
-            backgroundColor: isDebit
-              ? "rgba(233, 66, 53, 0.12)"
-              : "rgba(30, 140, 69, 0.12)",
-            color: isDebit
-              ? "var(--color-score-warning)"
-              : "var(--color-score-excellent)",
+            backgroundColor: isDebit ? "rgba(233, 66, 53, 0.12)" : "rgba(30, 140, 69, 0.12)",
+            color: isDebit ? "var(--color-score-warning)" : "var(--color-score-excellent)",
             fontSize: "1rem",
             flexShrink: 0,
           }}
           aria-hidden="true"
         >
-          <IonIcon
-            icon={isDebit ? Icons.status.trendingDown : Icons.status.trendingUp}
-          />
+          <IonIcon icon={isDebit ? Icons.status.trendingDown : Icons.status.trendingUp} />
         </span>
 
         {/* Amount */}
@@ -160,12 +162,11 @@ const SuggestionCard: React.FC<SuggestionCardProps> = ({
             fontSize: "var(--text-h2)",
             fontFamily: "var(--font-display)",
             fontWeight: "var(--font-weight-bold, 700)",
-            color: isDebit
-              ? "var(--color-score-warning)"
-              : "var(--color-score-excellent)",
+            color: isDebit ? "var(--color-score-warning)" : "var(--color-score-excellent)",
           }}
         >
-          {isDebit ? "−" : "+"}{formatINR(suggestion.amount)}
+          {isDebit ? "−" : "+"}
+          {formatINR(suggestion.amount)}
         </span>
 
         {/* Time */}
@@ -231,12 +232,8 @@ const SuggestionCard: React.FC<SuggestionCardProps> = ({
             minHeight: 40,
             padding: "var(--space-xs) var(--space-md)",
             borderRadius: "var(--radius-sm)",
-            backgroundColor: isDebit
-              ? "rgba(233, 66, 53, 0.1)"
-              : "rgba(30, 140, 69, 0.1)",
-            color: isDebit
-              ? "var(--color-score-warning)"
-              : "var(--color-score-excellent)",
+            backgroundColor: isDebit ? "rgba(233, 66, 53, 0.1)" : "rgba(30, 140, 69, 0.1)",
+            color: isDebit ? "var(--color-score-warning)" : "var(--color-score-excellent)",
             border: "none",
             fontSize: "var(--text-caption)",
             fontWeight: "var(--font-weight-semibold, 600)",
