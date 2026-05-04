@@ -95,7 +95,13 @@ const releaseNotesStyle: CSSProperties = {
  * ------------------------------------------------------------------ */
 
 const ProgressBar: React.FC<{ progress: number }> = ({ progress }) => (
-  <div style={progressTrackStyle} role="progressbar" aria-valuenow={progress} aria-valuemin={0} aria-valuemax={100}>
+  <div
+    style={progressTrackStyle}
+    role="progressbar"
+    aria-valuenow={progress}
+    aria-valuemin={0}
+    aria-valuemax={100}
+  >
     <div
       style={{
         width: `${Math.min(100, Math.max(0, progress))}%`,
