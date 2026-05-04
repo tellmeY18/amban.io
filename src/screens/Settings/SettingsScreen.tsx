@@ -44,6 +44,7 @@ import { haptics } from "../../utils/haptics";
 import { useAmbanScore } from "../../hooks/useAmbanScore";
 import { BUILD_INFO, formatBuildLabel } from "../../constants/buildInfo";
 import { exportAndOffer } from "../../utils/exportData";
+import { useAppUpdater } from "../../hooks/useAppUpdater";
 
 /** One emoji per theme mode — keeps the picker visual and compact. */
 const THEME_MODES: ReadonlyArray<{
@@ -549,6 +550,45 @@ const ResetSheet: React.FC<{
 };
 
 /* ------------------------------------------------------------------
+ * Update row — manual trigger for checking updates (Android only)
+ * ------------------------------------------------------------------ */
+
+const UpdateRow: React.FC = () => {
+  const { status, version, checkForUpdate, startDownload, install, progress } = useAppUpdater();
+
+  let label = "Check for updates";
+  let value = "Up to date";
+  let handler: (() => void) | undefined = () => void checkForUpdate();
+
+  if (status === "checking") {
+    value = "Checking…";
+    handler = undefined;
+  } else if (status === "available") {
+    label = `Update available: v${version}`;
+    value = "Download";
+    handler = () => void startDownload();
+  } else if (status === "downloading") {
+    label = `Downloading v${version}`;
+    value = `${progress}%`;
+    handler = undefined;
+  } else if (status === "ready") {
+    label = `v${version} ready`;
+    value = "Install";
+    handler = () => void install();
+  } else if (status === "error") {
+    label = "Download failed";
+    value = "Retry";
+    handler = () => void checkForUpdate();
+  } else if (status === "installing") {
+    label = `Installing v${version}`;
+    value = "…";
+    handler = undefined;
+  }
+
+  return <SettingsRow icon={Icons.action.forward} label={label} value={value} onSelect={handler} />;
+};
+
+/* ------------------------------------------------------------------
  * Main screen
  * ------------------------------------------------------------------ */
 
@@ -652,6 +692,7 @@ const SettingsScreen: React.FC = () => {
           />
 
           <SectionHeader>App</SectionHeader>
+          {Capacitor.getPlatform() === "android" ? <UpdateRow /> : null}
           <SettingsRow
             icon={Icons.status.notifications}
             label="Notifications"
