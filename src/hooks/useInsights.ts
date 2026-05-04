@@ -32,8 +32,13 @@ import { HOME_CAROUSEL_MAX, INSIGHT_DISMISS_TTL_HOURS } from "../constants/insig
 import { useAmbanScore } from "./useAmbanScore";
 import { useDailyStore } from "../stores/dailyStore";
 import { useFinanceStore } from "../stores/financeStore";
+import { useSmsSuggestionsStore } from "../stores/smsSuggestionsStore";
 import { today as todayStartOfDay } from "../utils/dateHelpers";
-import { INSIGHT_GENERATORS, type InsightContext } from "../utils/insightGenerators";
+import { INSIGHT_GENERATORS } from "../utils/insightGenerators";
+import {
+  ADVANCED_INSIGHT_GENERATORS,
+  type AdvancedInsightContext,
+} from "../utils/advancedInsights";
 
 /** Stable identifier per insight type. Persisted in the dismissed-list. */
 export type InsightId =
@@ -45,7 +50,18 @@ export type InsightId =
   | "best-worst-day"
   | "lifestyle-upgrade"
   | "coffee-math"
-  | "income-countdown";
+  | "income-countdown"
+  // Advanced insights
+  | "anomaly-detection"
+  | "spending-velocity"
+  | "spending-trend"
+  | "weekend-pattern"
+  | "month-end-crunch"
+  | "payday-splurge"
+  | "week-over-week"
+  | "top-merchant"
+  | "savings-potential"
+  | "consistency-score";
 
 /**
  * Priority buckets. Lower number = shown first.
@@ -146,13 +162,14 @@ async function appendDismissal(id: InsightId, now: Date): Promise<void> {
  * stays O(n_logs) with tiny constants.
  * ------------------------------------------------------------------ */
 
-function useInsightContext(): InsightContext {
+function useInsightContext(): AdvancedInsightContext {
   const score = useAmbanScore();
   const logs = useDailyStore((s) => s.logs);
   const incomeSources = useFinanceStore((s) => s.incomeSources);
   const recurringPayments = useFinanceStore((s) => s.recurringPayments);
+  const smsData = useSmsSuggestionsStore((s) => s.pending);
 
-  return useMemo<InsightContext>(() => {
+  return useMemo<AdvancedInsightContext>(() => {
     const today = todayStartOfDay();
     return {
       today,
@@ -186,6 +203,12 @@ function useInsightContext(): InsightContext {
         spent: l.spent,
         scoreAtLog: l.scoreAtLog,
       })),
+      recentTransactions: smsData.map((s) => ({
+        amount: s.amount,
+        direction: s.direction,
+        counterparty: s.counterparty,
+        receivedAt: s.receivedAt,
+      })),
     };
   }, [
     score.score,
@@ -197,6 +220,7 @@ function useInsightContext(): InsightContext {
     logs,
     incomeSources,
     recurringPayments,
+    smsData,
   ]);
 }
 
@@ -252,6 +276,14 @@ export function useInsights(options: UseInsightsOptions = {}): UseInsightsResult
       if (!insight) return;
       if (dismissed.has(insight.id)) return;
       produced.push({ insight, order: index });
+    });
+
+    // Run advanced generators
+    ADVANCED_INSIGHT_GENERATORS.forEach((entry, index) => {
+      const insight = entry.generate(ctx as AdvancedInsightContext);
+      if (!insight) return;
+      if (dismissed.has(insight.id)) return;
+      produced.push({ insight, order: INSIGHT_GENERATORS.length + index });
     });
 
     produced.sort((a, b) => {

@@ -105,7 +105,7 @@ export const INSIGHT_DISMISS_TTL_HOURS = 24;
 //                    when the OS requests reduced motion.
 // ------------------------------------------------------------
 
-export const HOME_CAROUSEL_MAX = 3;
+export const HOME_CAROUSEL_MAX = 5;
 export const HOME_CAROUSEL_ROTATE_MS = 5000;
 
 // ------------------------------------------------------------
@@ -145,4 +145,4 @@ export const COFFEE_MATH_THRESHOLDS: ReadonlyArray<{
 //   partial parses from cluttering the suggestion inbox.
 // ------------------------------------------------------------
 
-export const SMS_MIN_CONFIDENCE = 0.6;
+export const SMS_MIN_CONFIDENCE = 0.5;

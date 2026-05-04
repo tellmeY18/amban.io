@@ -108,6 +108,52 @@ const BANK_SENDER_PATTERNS: ReadonlyArray<RegExp> = [
   /PNBSMS/i,
   // Union Bank
   /UBOI/i,
+  // AU Small Finance Bank
+  /AUSFB/i,
+  // Bandhan Bank
+  /BANDHN/i,
+  // IDBI Bank
+  /IDBIBK/i,
+  // Bank of Maharashtra
+  /MAHABK/i,
+  // Central Bank of India
+  /CENTBK/i,
+  // Indian Overseas Bank
+  /IOBSMS/i,
+  // UCO Bank
+  /UCOBK/i,
+  // Karnataka Bank
+  /KTKBNK/i,
+  // South Indian Bank
+  /SIBSMS/i,
+  // City Union Bank
+  /CUBSMS/i,
+  // Tamilnad Mercantile Bank
+  /TMBSMS/i,
+  // DCB Bank
+  /DCBBNK/i,
+  // CSB Bank
+  /CSBBNK/i,
+  // Ujjivan SFB
+  /UJJIVN/i,
+  // Equitas SFB
+  /EQITAS/i,
+  // Jana SFB
+  /JNSFBK/i,
+  // Airtel Payments Bank
+  /AIRTEL/i,
+  // CRED
+  /CREDCL/i,
+  // PayU / Razorpay (payment gateways)
+  /PAYUTX/i,
+  /RAZRPY/i,
+  // Slice / Fi / Jupiter (neobanks)
+  /SLICEP/i,
+  /FIBNK/i,
+  /JUPBNK/i,
+  // Groww / Zerodha (investments)
+  /GROWW/i,
+  /ZERODH/i,
   // Generic bank-style senders (2-letter prefix + 6 letter alpha)
   /^[A-Z]{2}-[A-Z]{4,8}$/i,
 ];
@@ -144,10 +190,21 @@ const BALANCE_ONLY_PATTERNS: ReadonlyArray<RegExp> = [
  * ------------------------------------------------------------------ */
 
 /**
- * Matches amount prefixed by a currency indicator.
- * Captures the numeric part (digits, commas, optional decimal).
+ * Extended amount extraction — tries multiple patterns for broader Indian bank
+ * SMS coverage. Patterns are tried in order; first match wins.
  */
-const AMOUNT_RE = /(?:Rs\.?\s*|INR\.?\s*|₹\s*)([\d,]+(?:\.\d{1,2})?)/;
+const AMOUNT_PATTERNS: ReadonlyArray<RegExp> = [
+  // Standard: Rs. 1,23,456.78 | Rs 1234 | INR 1,234 | ₹1234
+  /(?:Rs\.?\s*|INR\.?\s*|₹\s*)([\d,]+(?:\.\d{1,2})?)/,
+  // "Amt:" or "Amount:" prefix (some banks)
+  /(?:Amt|Amount)\s*(?::|\s)\s*(?:Rs\.?\s*|INR\.?\s*|₹\s*)?([\d,]+(?:\.\d{1,2})?)/i,
+  // "Transaction of Rs.1234" or "Txn of Rs.1234"
+  /(?:transaction|txn)\s+(?:of|for|:)\s*(?:Rs\.?\s*|INR\.?\s*|₹\s*)([\d,]+(?:\.\d{1,2})?)/i,
+  // Bare INR1,234 (no space after INR)
+  /INR([\d,]+(?:\.\d{1,2})?)/,
+  // "debited for 1234" or "credited with 1234" (amount after direction keyword)
+  /(?:debited|credited|paid|received)\s+(?:for|with|by)?\s*(?:Rs\.?\s*|INR\.?\s*|₹\s*)?([\d,]+(?:\.\d{1,2})?)/i,
+];
 
 /**
  * Parse an Indian-formatted number string into a float.
@@ -207,11 +264,16 @@ interface TemplateResult {
  */
 type TemplateFn = (body: string, sender: string) => TemplateResult | null;
 
-/** Helper: extract amount from body using the standard AMOUNT_RE. */
+/** Helper: extract amount from body using multiple patterns for broader coverage. */
 function extractAmount(body: string): number {
-  const m = AMOUNT_RE.exec(body);
-  if (!m || !m[1]) return 0;
-  return parseAmount(m[1]);
+  for (const pattern of AMOUNT_PATTERNS) {
+    const m = pattern.exec(body);
+    if (m && m[1]) {
+      const val = parseAmount(m[1]);
+      if (val > 0) return val;
+    }
+  }
+  return 0;
 }
 
 /** Helper: extract account last-4. */
@@ -253,6 +315,25 @@ function extractCounterparty(body: string, direction: "debit" | "credit"): strin
   // "Info: <merchant>" pattern (HDFC style)
   const infoMatch = /Info:\s*([A-Za-z][A-Za-z0-9 ._&'-]{1,40})/i.exec(body);
   if (infoMatch && infoMatch[1]) return cleanCounterparty(infoMatch[1]);
+
+  // "Paid to: <name>" or "Transfer to: <name>"
+  const paidToMatch =
+    /(?:paid\s+to|transfer(?:red)?\s+to|beneficiary)\s*:?\s*([A-Za-z][A-Za-z0-9 ._&'-]{1,40})/i.exec(
+      body,
+    );
+  if (paidToMatch && paidToMatch[1]) return cleanCounterparty(paidToMatch[1]);
+
+  // Standalone VPA pattern (not prefixed by to/from)
+  const standaloneVpa = /(?:VPA|UPI\s*ID)\s*:?\s*([a-zA-Z0-9._-]+@[a-zA-Z]+)\b/i.exec(body);
+  if (standaloneVpa && standaloneVpa[1]) return standaloneVpa[1];
+
+  // HDFC UPI pattern: "UPI/<merchant>/<ref>"
+  const upiSlash = /UPI\/([^/]+)\//i.exec(body);
+  if (upiSlash && upiSlash[1] && upiSlash[1].length > 2) return cleanCounterparty(upiSlash[1]);
+
+  // "Merchant: <name>"
+  const merchantMatch = /(?:merchant|payee)\s*:?\s*([A-Za-z][A-Za-z0-9 ._&'-]{1,40})/i.exec(body);
+  if (merchantMatch && merchantMatch[1]) return cleanCounterparty(merchantMatch[1]);
 
   return null;
 }
@@ -399,6 +480,75 @@ const walletTemplate: TemplateFn = (body, sender) => {
 };
 
 /**
+ * ATM withdrawal template.
+ * Matches: "ATM WDL", "cash withdrawal", "ATM cash"
+ */
+const atmTemplate: TemplateFn = (body) => {
+  if (!/\b(?:ATM|cash\s*withdr)/i.test(body)) return null;
+
+  const amount = extractAmount(body);
+  if (amount <= 0) return null;
+
+  return {
+    direction: "debit",
+    amount,
+    counterparty: "ATM Withdrawal",
+    accountLast4: extractAccount(body),
+    referenceId: extractRef(body),
+  };
+};
+
+/**
+ * EMI / auto-debit template.
+ * Matches: "EMI", "auto-debit", "auto debit", "mandate"
+ */
+const emiTemplate: TemplateFn = (body) => {
+  if (!/\b(?:EMI|auto[\s-]*debit|mandate|standing\s*instruction|SI\s+debit)\b/i.test(body)) {
+    return null;
+  }
+
+  const amount = extractAmount(body);
+  if (amount <= 0) return null;
+
+  // Try to extract the EMI label (e.g., "EMI for Home Loan")
+  const emiLabel = /(?:EMI|mandate|SI)\s+(?:for|of|:)\s*([A-Za-z][A-Za-z0-9 ._&'-]{1,30})/i.exec(
+    body,
+  );
+  const counterparty = emiLabel && emiLabel[1] ? cleanCounterparty(emiLabel[1]) : "EMI/Auto-debit";
+
+  return {
+    direction: "debit",
+    amount,
+    counterparty,
+    accountLast4: extractAccount(body),
+    referenceId: extractRef(body),
+  };
+};
+
+/**
+ * International transaction template.
+ * Matches: "intl txn", "international", foreign currency mentions
+ */
+const internationalTemplate: TemplateFn = (body) => {
+  if (!/\b(?:int(?:er)?(?:national)?l?\s*(?:txn|transaction)?|USD|EUR|GBP|AED|SGD)\b/i.test(body)) {
+    return null;
+  }
+  // Must also have a debit keyword
+  if (!/\b(?:debit|spent|charged|used)\b/i.test(body)) return null;
+
+  const amount = extractAmount(body);
+  if (amount <= 0) return null;
+
+  return {
+    direction: "debit",
+    amount,
+    counterparty: extractCounterparty(body, "debit") ?? "International Transaction",
+    accountLast4: extractAccount(body),
+    referenceId: extractRef(body),
+  };
+};
+
+/**
  * Ordered template pipeline. More specific templates first, then
  * generic fallbacks. First match with a positive amount wins.
  */
@@ -406,6 +556,9 @@ const TEMPLATES: ReadonlyArray<TemplateFn> = [
   upiTemplate,
   bankTransferTemplate,
   walletTemplate,
+  atmTemplate,
+  emiTemplate,
+  internationalTemplate,
   debitTemplate,
   creditTemplate,
 ];

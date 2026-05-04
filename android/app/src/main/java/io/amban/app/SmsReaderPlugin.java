@@ -2,6 +2,8 @@ package io.amban.app;
 
 import android.Manifest;
 import android.content.ContentResolver;
+import android.content.SharedPreferences;
+import android.content.Context;
 import android.database.Cursor;
 import android.net.Uri;
 import android.provider.Telephony;
@@ -15,6 +17,9 @@ import com.getcapacitor.annotation.CapacitorPlugin;
 import com.getcapacitor.annotation.Permission;
 import com.getcapacitor.annotation.PermissionCallback;
 
+import org.json.JSONArray;
+import org.json.JSONObject;
+
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
@@ -25,10 +30,14 @@ import java.util.TimeZone;
  *
  * Source of truth: CLAUDE.md §15 (SMS Capture & Auto-Suggestions).
  *
- * Exposes three methods to the JS layer:
- *   - checkPermission()   → { granted: boolean }
- *   - requestPermission() → { granted: boolean }
- *   - readSince(options)  → { messages: SmsMessage[] }
+ * Exposes methods to the JS layer:
+ *   - checkPermission()      → { granted: boolean }
+ *   - requestPermission()    → { granted: boolean }
+ *   - readSince(options)     → { messages: SmsMessage[] }
+ *   - getStagedMessages()    → { messages: SmsMessage[] }  (from BroadcastReceiver/Worker queue)
+ *   - clearStagedMessages()  → void
+ *   - checkReceiveSmsPermission() → { granted: boolean }
+ *   - requestReceiveSmsPermission() → { granted: boolean }
  *
  * Privacy:
  *   - Reads from the on-device Telephony content provider only.
@@ -41,12 +50,19 @@ import java.util.TimeZone;
         @Permission(
             alias = "sms",
             strings = { Manifest.permission.READ_SMS }
+        ),
+        @Permission(
+            alias = "receiveSms",
+            strings = { Manifest.permission.RECEIVE_SMS }
         )
     }
 )
 public class SmsReaderPlugin extends Plugin {
 
     private static final String PERMISSION_ALIAS = "sms";
+    private static final String RECEIVE_PERMISSION_ALIAS = "receiveSms";
+    private static final String STAGING_PREFS = "amban_sms_staging";
+    private static final String KEY_QUEUE = "pending_sms_queue";
 
     /* ---------------------------------------------------------------
      * checkPermission() → { granted: boolean }
@@ -62,9 +78,6 @@ public class SmsReaderPlugin extends Plugin {
 
     /* ---------------------------------------------------------------
      * requestPermission() → { granted: boolean }
-     *
-     * Triggers the Android runtime permission dialog for READ_SMS.
-     * The result arrives asynchronously in the @PermissionCallback.
      * --------------------------------------------------------------- */
 
     @PluginMethod
@@ -87,15 +100,111 @@ public class SmsReaderPlugin extends Plugin {
     }
 
     /* ---------------------------------------------------------------
-     * readSince({ sinceIso: string, limit?: number }) → { messages }
+     * checkReceiveSmsPermission() → { granted: boolean }
+     * --------------------------------------------------------------- */
+
+    @PluginMethod
+    public void checkReceiveSmsPermission(PluginCall call) {
+        boolean granted = getPermissionState(RECEIVE_PERMISSION_ALIAS) == com.getcapacitor.PermissionState.GRANTED;
+        JSObject result = new JSObject();
+        result.put("granted", granted);
+        call.resolve(result);
+    }
+
+    /* ---------------------------------------------------------------
+     * requestReceiveSmsPermission() → { granted: boolean }
+     * --------------------------------------------------------------- */
+
+    @PluginMethod
+    public void requestReceiveSmsPermission(PluginCall call) {
+        if (getPermissionState(RECEIVE_PERMISSION_ALIAS) == com.getcapacitor.PermissionState.GRANTED) {
+            JSObject result = new JSObject();
+            result.put("granted", true);
+            call.resolve(result);
+            return;
+        }
+        requestPermissionForAlias(RECEIVE_PERMISSION_ALIAS, call, "onReceiveSmsPermissionResult");
+    }
+
+    @PermissionCallback
+    private void onReceiveSmsPermissionResult(PluginCall call) {
+        boolean granted = getPermissionState(RECEIVE_PERMISSION_ALIAS) == com.getcapacitor.PermissionState.GRANTED;
+        JSObject result = new JSObject();
+        result.put("granted", granted);
+        call.resolve(result);
+    }
+
+    /* ---------------------------------------------------------------
+     * getStagedMessages() → { messages: SmsMessage[] }
      *
-     * Reads SMS messages received after the given ISO-8601 timestamp.
-     * Returns at most `limit` messages (default 500).
+     * Reads messages staged by SmsBroadcastReceiver and SmsWorker
+     * from SharedPreferences. Returns them and clears the queue.
+     * --------------------------------------------------------------- */
+
+    @PluginMethod
+    public void getStagedMessages(PluginCall call) {
+        SharedPreferences prefs = getContext().getSharedPreferences(STAGING_PREFS, Context.MODE_PRIVATE);
+        String queueStr = prefs.getString(KEY_QUEUE, "[]");
+
+        JSArray messages = new JSArray();
+        try {
+            JSONArray queue = new JSONArray(queueStr);
+            SimpleDateFormat isoFormat = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US);
+            isoFormat.setTimeZone(TimeZone.getTimeZone("UTC"));
+
+            for (int i = 0; i < queue.length(); i++) {
+                JSONObject obj = queue.getJSONObject(i);
+                JSObject msg = new JSObject();
+                msg.put("messageId", obj.optString("messageId", ""));
+                msg.put("sender", obj.optString("sender", ""));
+                msg.put("body", obj.optString("body", ""));
+
+                // Handle receivedAt — could be epoch ms (from BroadcastReceiver) or ISO (from Worker)
+                String receivedAt = obj.optString("receivedAt", "");
+                if (receivedAt.isEmpty()) {
+                    long ms = obj.optLong("receivedAt", System.currentTimeMillis());
+                    receivedAt = isoFormat.format(new Date(ms));
+                } else {
+                    try {
+                        // If it's a numeric string (epoch ms from BroadcastReceiver)
+                        long ms = Long.parseLong(receivedAt);
+                        receivedAt = isoFormat.format(new Date(ms));
+                    } catch (NumberFormatException e) {
+                        // Already ISO format — keep as-is
+                    }
+                }
+                msg.put("receivedAt", receivedAt);
+                messages.put(msg);
+            }
+        } catch (Exception e) {
+            // Return empty on parse failure
+        }
+
+        // Clear the queue after reading
+        prefs.edit().putString(KEY_QUEUE, "[]").apply();
+
+        JSObject result = new JSObject();
+        result.put("messages", messages);
+        call.resolve(result);
+    }
+
+    /* ---------------------------------------------------------------
+     * clearStagedMessages() → void
+     * --------------------------------------------------------------- */
+
+    @PluginMethod
+    public void clearStagedMessages(PluginCall call) {
+        SharedPreferences prefs = getContext().getSharedPreferences(STAGING_PREFS, Context.MODE_PRIVATE);
+        prefs.edit().putString(KEY_QUEUE, "[]").apply();
+        call.resolve();
+    }
+
+    /* ---------------------------------------------------------------
+     * readSince({ sinceIso: string, limit?: number }) → { messages }
      * --------------------------------------------------------------- */
 
     @PluginMethod
     public void readSince(PluginCall call) {
-        // Guard: permission must be granted before reading.
         if (getPermissionState(PERMISSION_ALIAS) != com.getcapacitor.PermissionState.GRANTED) {
             call.reject("READ_SMS permission not granted");
             return;
@@ -142,14 +251,11 @@ public class SmsReaderPlugin extends Plugin {
                 do {
                     JSObject msg = new JSObject();
 
-                    // messageId: stable composite of provider _id + body hash
                     String rowId = idIdx >= 0 ? cursor.getString(idIdx) : "";
                     String body = bodyIdx >= 0 ? cursor.getString(bodyIdx) : "";
                     String sender = addressIdx >= 0 ? cursor.getString(addressIdx) : "";
                     long dateMs = dateIdx >= 0 ? cursor.getLong(dateIdx) : 0;
 
-                    // Stable message ID: provider row ID + body hash avoids
-                    // collisions if the provider recycles _id values.
                     String messageId = rowId + "_" + Math.abs(body.hashCode());
 
                     msg.put("messageId", messageId);
@@ -178,14 +284,8 @@ public class SmsReaderPlugin extends Plugin {
      * Helpers
      * --------------------------------------------------------------- */
 
-    /**
-     * Parse an ISO-8601 timestamp into epoch milliseconds.
-     * Handles both "2025-01-15T10:30:00.000Z" and "2025-01-15T10:30:00Z".
-     */
     private long parseIso8601(String iso) throws Exception {
-        // Normalise: strip trailing Z and fractional seconds for SimpleDateFormat
         String cleaned = iso.replace("Z", "+00:00");
-        // Handle the colon in timezone offset for older Android
         if (cleaned.lastIndexOf('+') > 10) {
             int tzIdx = cleaned.lastIndexOf('+');
             String tz = cleaned.substring(tzIdx);
@@ -201,7 +301,6 @@ public class SmsReaderPlugin extends Plugin {
             }
         }
 
-        // Try with fractional seconds first, then without
         SimpleDateFormat[] formats = {
             new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSZ", Locale.US),
             new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssZ", Locale.US),
@@ -211,9 +310,7 @@ public class SmsReaderPlugin extends Plugin {
             fmt.setTimeZone(TimeZone.getTimeZone("UTC"));
             try {
                 return fmt.parse(cleaned).getTime();
-            } catch (Exception ignored) {
-                // try next format
-            }
+            } catch (Exception ignored) {}
         }
 
         throw new Exception("Could not parse: " + iso);

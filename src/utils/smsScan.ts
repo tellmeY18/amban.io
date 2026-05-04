@@ -1,21 +1,14 @@
 /**
- * utils/smsScan.ts — SMS scan orchestrator for Android.
+ * utils/smsScan.ts — Aggressive SMS scan orchestrator for Android.
  *
  * Source of truth: CLAUDE.md §15.4 (Trigger Model), §15.5 (Parser).
  *
- * Responsibilities:
- *   - Define the SmsReaderPlugin interface for the custom Capacitor
- *     plugin (native Android) and register it with a web fallback.
- *   - Orchestrate a foreground scan: read SMS since last scan, parse
- *     each through `parseSms()`, filter by confidence, upsert into
- *     the `sms_suggestions` table, and update the scan timestamp.
- *
- * Trigger model (v0.2.0):
- *   - App-foreground scan on every resume + cold start (once permission
- *     is granted and SMS capture is enabled).
- *   - Idempotent: duplicate `message_id` values are silently skipped
- *     via the UNIQUE constraint + INSERT OR IGNORE.
- *   - No background service in v0.2 — live BroadcastReceiver is v0.3.
+ * ENHANCED (v0.2.1): Aggressive mode.
+ *   - Processes staged messages from the BroadcastReceiver/WorkManager
+ *     queue on every app resume (zero-latency for new SMS).
+ *   - Combined aggressive scan: staged + full provider read.
+ *   - Auto-accept for high-confidence debit suggestions (configurable).
+ *   - Lower confidence threshold for broader capture.
  *
  * Privacy:
  *   - The original SMS body is never stored. Only parsed fields land
@@ -34,56 +27,44 @@ import type { SQLiteDBConnection } from "@capacitor-community/sqlite";
 
 /* ------------------------------------------------------------------
  * Capacitor plugin definition
- *
- * The native implementation lives in:
- *   android/app/src/main/java/io/amban/app/sms/SmsReaderPlugin.java
- *
- * The web fallback (src/utils/smsReaderWeb.ts) returns safe defaults
- * so the app compiles and runs on the Vite dev server.
  * ------------------------------------------------------------------ */
 
-/** Raw SMS message as delivered by the native plugin. */
 export interface SmsMessage {
   messageId: string;
   sender: string;
   body: string;
-  receivedAt: string; // ISO timestamp
+  receivedAt: string;
 }
 
-/** Capacitor plugin interface for reading device SMS. */
 export interface SmsReaderPlugin {
-  /** Check whether READ_SMS permission has been granted. */
   checkPermission(): Promise<{ granted: boolean }>;
-
-  /** Request READ_SMS permission from the user. */
   requestPermission(): Promise<{ granted: boolean }>;
-
-  /**
-   * Read SMS messages received since the given ISO timestamp.
-   * Returns at most `limit` messages (default: 500).
-   */
   readSince(options: { sinceIso: string; limit?: number }): Promise<{ messages: SmsMessage[] }>;
+  /** Read messages staged by BroadcastReceiver/WorkManager and clear the queue. */
+  getStagedMessages(): Promise<{ messages: SmsMessage[] }>;
+  /** Clear the staging queue without reading. */
+  clearStagedMessages(): Promise<void>;
+  /** Check if RECEIVE_SMS permission is granted (needed for BroadcastReceiver). */
+  checkReceiveSmsPermission(): Promise<{ granted: boolean }>;
+  /** Request RECEIVE_SMS permission for real-time capture. */
+  requestReceiveSmsPermission(): Promise<{ granted: boolean }>;
 }
 
-/**
- * Registered Capacitor plugin instance. On web, the dynamic import
- * resolves to SmsReaderWeb which returns empty/false for everything.
- */
 export const SmsReader = registerPlugin<SmsReaderPlugin>("SmsReader", {
   web: () => import("./smsReaderWeb").then((m) => new m.SmsReaderWeb()),
 });
 
 /* ------------------------------------------------------------------
- * Preference keys — string literals per the scope constraint.
- * The DB resilience agent is adding these to PreferenceKey; we use
- * the raw strings here to avoid import conflicts.
+ * Preference keys
  * ------------------------------------------------------------------ */
 
 const PREF_LAST_SMS_SCAN_AT = "amban.last_sms_scan_at";
 const PREF_SMS_CAPTURE_ENABLED = "amban.sms_capture_enabled";
+const PREF_SMS_AUTO_ACCEPT = "amban.sms_auto_accept";
+// Reserved for future use: const PREF_SMS_AGGRESSIVE_MODE = "amban.sms_aggressive_mode";
 
 /* ------------------------------------------------------------------
- * DB helpers (inline — not touching repositories.ts)
+ * DB helpers
  * ------------------------------------------------------------------ */
 
 async function withDb<T>(fn: (db: SQLiteDBConnection) => Promise<T>): Promise<T> {
@@ -95,24 +76,17 @@ async function withDb<T>(fn: (db: SQLiteDBConnection) => Promise<T>): Promise<T>
  * Scan result type
  * ------------------------------------------------------------------ */
 
-/** Summary of a completed SMS scan. */
 export interface SmsScanResult {
-  /** Total SMS messages read from the device inbox. */
   scanned: number;
-  /** Messages that the parser successfully extracted a transaction from. */
   parsed: number;
-  /** New suggestions inserted into the DB (excludes duplicates). */
   newSuggestions: number;
+  autoAccepted: number;
 }
 
 /* ------------------------------------------------------------------
  * Public API
  * ------------------------------------------------------------------ */
 
-/**
- * Returns `true` if SMS capture is available and enabled.
- * Checks platform (Android only) and the user preference toggle.
- */
 export async function isSmsCaptureActive(): Promise<boolean> {
   if (Capacitor.getPlatform() !== "android") return false;
 
@@ -124,60 +98,145 @@ export async function isSmsCaptureActive(): Promise<boolean> {
 }
 
 /**
- * Run a foreground SMS scan.
- *
- * 1. Reads the `last_sms_scan_at` timestamp from Preferences.
- * 2. Fetches all SMS since that timestamp via the native plugin.
- * 3. Runs each through `parseSms()`.
- * 4. Filters by `SMS_MIN_CONFIDENCE`.
- * 5. Upserts into `sms_suggestions` (idempotent on `message_id`).
- * 6. Updates `last_sms_scan_at`.
- *
- * @returns  A summary with counts of scanned, parsed, and new suggestions.
- * @throws   If the DB write fails. Plugin read failures are caught and
- *           result in `{ scanned: 0, parsed: 0, newSuggestions: 0 }`.
+ * Check if auto-accept mode is enabled. When enabled, high-confidence
+ * debit suggestions (>= 0.9) are automatically logged without user
+ * intervention.
  */
-export async function runSmsScan(): Promise<SmsScanResult> {
-  // Guard: Android only
+export async function isAutoAcceptEnabled(): Promise<boolean> {
+  const { value } = await Preferences.get({ key: PREF_SMS_AUTO_ACCEPT });
+  return value === "1";
+}
+
+/**
+ * Process staged messages from the BroadcastReceiver/WorkManager queue.
+ * These are SMS that arrived while the app was in the background and
+ * were captured in real-time by the native layer.
+ *
+ * This should be called FIRST on app resume, before runSmsScan(),
+ * because it picks up messages that may not yet be visible in the
+ * Telephony content provider (race condition on some OEMs).
+ */
+export async function processStagedMessages(): Promise<SmsScanResult> {
   if (Capacitor.getPlatform() !== "android") {
-    return { scanned: 0, parsed: 0, newSuggestions: 0 };
+    return { scanned: 0, parsed: 0, newSuggestions: 0, autoAccepted: 0 };
   }
 
-  // Guard: permission check
   const { granted } = await SmsReader.checkPermission();
   if (!granted) {
-    return { scanned: 0, parsed: 0, newSuggestions: 0 };
+    return { scanned: 0, parsed: 0, newSuggestions: 0, autoAccepted: 0 };
   }
 
-  // Read the last scan timestamp — default to 24h ago on first scan
+  let messages: SmsMessage[];
+  try {
+    const result = await SmsReader.getStagedMessages();
+    messages = result.messages;
+  } catch (err) {
+    console.warn("[smsScan] getStagedMessages failed:", err);
+    return { scanned: 0, parsed: 0, newSuggestions: 0, autoAccepted: 0 };
+  }
+
+  if (messages.length === 0) {
+    return { scanned: 0, parsed: 0, newSuggestions: 0, autoAccepted: 0 };
+  }
+
+  return processMessages(messages);
+}
+
+/**
+ * Run the standard SMS scan (reads from Telephony content provider).
+ */
+export async function runSmsScan(): Promise<SmsScanResult> {
+  if (Capacitor.getPlatform() !== "android") {
+    return { scanned: 0, parsed: 0, newSuggestions: 0, autoAccepted: 0 };
+  }
+
+  const { granted } = await SmsReader.checkPermission();
+  if (!granted) {
+    return { scanned: 0, parsed: 0, newSuggestions: 0, autoAccepted: 0 };
+  }
+
   const { value: lastScanRaw } = await Preferences.get({ key: PREF_LAST_SMS_SCAN_AT });
   const sinceIso =
     lastScanRaw && lastScanRaw.length > 0
       ? lastScanRaw
       : new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
-  // Fetch messages from the native plugin
   let messages: SmsMessage[];
   try {
     const result = await SmsReader.readSince({ sinceIso, limit: 500 });
     messages = result.messages;
   } catch (err) {
     console.warn("[smsScan] Plugin readSince failed:", err);
-    return { scanned: 0, parsed: 0, newSuggestions: 0 };
+    return { scanned: 0, parsed: 0, newSuggestions: 0, autoAccepted: 0 };
   }
 
-  const scanned = messages.length;
-  if (scanned === 0) {
-    // Even with zero messages, update the scan timestamp so we don't
-    // re-scan the same empty window next time.
+  if (messages.length === 0) {
     await Preferences.set({ key: PREF_LAST_SMS_SCAN_AT, value: new Date().toISOString() });
-    return { scanned: 0, parsed: 0, newSuggestions: 0 };
+    return { scanned: 0, parsed: 0, newSuggestions: 0, autoAccepted: 0 };
   }
 
-  // Parse each message
+  const result = await processMessages(messages);
+
+  await Preferences.set({ key: PREF_LAST_SMS_SCAN_AT, value: new Date().toISOString() });
+
+  return result;
+}
+
+/**
+ * Aggressive scan: processes staged (real-time) messages FIRST, then
+ * does a full content-provider scan. Deduplication is handled by the
+ * DB's UNIQUE constraint on message_id.
+ *
+ * This is the primary entry point for the app-resume lifecycle.
+ */
+export async function runAggressiveScan(): Promise<SmsScanResult> {
+  const active = await isSmsCaptureActive();
+  if (!active) {
+    return { scanned: 0, parsed: 0, newSuggestions: 0, autoAccepted: 0 };
+  }
+
+  // Phase 1: Process staged messages (from BroadcastReceiver/Worker)
+  const stagedResult = await processStagedMessages();
+
+  // Phase 2: Full provider scan (catches anything missed)
+  const providerResult = await runSmsScan();
+
+  return {
+    scanned: stagedResult.scanned + providerResult.scanned,
+    parsed: stagedResult.parsed + providerResult.parsed,
+    newSuggestions: stagedResult.newSuggestions + providerResult.newSuggestions,
+    autoAccepted: stagedResult.autoAccepted + providerResult.autoAccepted,
+  };
+}
+
+/**
+ * One-time initial scan over the past N days.
+ */
+export async function runInitialScan(days = 7): Promise<SmsScanResult> {
+  const clampedDays = Math.max(1, Math.min(30, days));
+  const sinceIso = new Date(Date.now() - clampedDays * 24 * 60 * 60 * 1000).toISOString();
+
+  await Preferences.set({ key: PREF_LAST_SMS_SCAN_AT, value: sinceIso });
+
+  return runSmsScan();
+}
+
+/* ------------------------------------------------------------------
+ * Internal: process a batch of messages
+ *
+ * NOTE: The SMS_MIN_CONFIDENCE threshold used here is defined in
+ * src/constants/insightThresholds.ts. Lower it there to capture
+ * more messages (recommended: 0.5 for aggressive mode).
+ * ------------------------------------------------------------------ */
+
+async function processMessages(messages: SmsMessage[]): Promise<SmsScanResult> {
+  const scanned = messages.length;
   let parsed = 0;
   let newSuggestions = 0;
+  let autoAccepted = 0;
   const now = new Date().toISOString();
+
+  const autoAccept = await isAutoAcceptEnabled();
 
   await withDb(async (db) => {
     for (const msg of messages) {
@@ -193,14 +252,17 @@ export async function runSmsScan(): Promise<SmsScanResult> {
 
       parsed++;
 
-      // INSERT OR IGNORE — idempotent on message_id UNIQUE constraint.
-      // If the row already exists, the insert silently does nothing.
+      // Determine initial status
+      const shouldAutoAccept = autoAccept && txn.confidence >= 0.9 && txn.direction === "debit";
+
+      const status = shouldAutoAccept ? "accepted" : "pending";
+
       const result = await db.run(
         `INSERT OR IGNORE INTO sms_suggestions
            (message_id, received_at, sender, direction, amount,
             counterparty, account_last4, reference_id, confidence,
             status, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           msg.messageId,
           msg.receivedAt,
@@ -211,36 +273,59 @@ export async function runSmsScan(): Promise<SmsScanResult> {
           txn.accountLast4,
           txn.referenceId,
           txn.confidence,
+          status,
           now,
         ],
       );
 
-      // `changes` > 0 means a new row was inserted (not a duplicate).
       if (result.changes && result.changes.changes && result.changes.changes > 0) {
         newSuggestions++;
+
+        // Auto-accept: create a daily log entry
+        if (shouldAutoAccept) {
+          const today = new Date().toISOString().split("T")[0];
+          try {
+            // Check if there's already a log for today
+            const existing = await db.query("SELECT id, spent FROM daily_logs WHERE log_date = ?", [
+              today,
+            ]);
+            const rows = (existing?.values ?? []) as Array<{ id: number; spent: number }>;
+
+            if (rows.length > 0 && rows[0]) {
+              // Add to existing log (additive behavior)
+              const newSpent = rows[0].spent + txn.amount;
+              await db.run("UPDATE daily_logs SET spent = ? WHERE id = ?", [newSpent, rows[0].id]);
+              // Link the suggestion to this log
+              await db.run("UPDATE sms_suggestions SET linked_log_id = ? WHERE message_id = ?", [
+                rows[0].id,
+                msg.messageId,
+              ]);
+            } else {
+              // Create new log for today
+              const insertResult = await db.run(
+                `INSERT INTO daily_logs (log_date, spent, notes, logged_at)
+                 VALUES (?, ?, ?, ?)`,
+                [today, txn.amount, `[Auto] ${txn.counterparty || "SMS transaction"}`, now],
+              );
+              if (insertResult.changes?.lastId) {
+                await db.run("UPDATE sms_suggestions SET linked_log_id = ? WHERE message_id = ?", [
+                  insertResult.changes.lastId,
+                  msg.messageId,
+                ]);
+              }
+            }
+            autoAccepted++;
+          } catch (err) {
+            console.warn("[smsScan] Auto-accept failed for", msg.messageId, err);
+            // Revert to pending status if auto-accept fails
+            await db.run("UPDATE sms_suggestions SET status = 'pending' WHERE message_id = ?", [
+              msg.messageId,
+            ]);
+          }
+        }
       }
     }
   });
 
-  // Update scan timestamp
-  await Preferences.set({ key: PREF_LAST_SMS_SCAN_AT, value: now });
-
-  return { scanned, parsed, newSuggestions };
-}
-
-/**
- * Run a one-time initial scan over the past N days. Used when the user
- * first enables SMS capture, to backfill suggestions from recent SMS.
- *
- * @param days  Number of past days to scan (default: 7, max: 30).
- */
-export async function runInitialScan(days = 7): Promise<SmsScanResult> {
-  const clampedDays = Math.max(1, Math.min(30, days));
-  const sinceIso = new Date(Date.now() - clampedDays * 24 * 60 * 60 * 1000).toISOString();
-
-  // Override the last-scan-at to the requested window so runSmsScan
-  // picks up the full range.
-  await Preferences.set({ key: PREF_LAST_SMS_SCAN_AT, value: sinceIso });
-
-  return runSmsScan();
+  return { scanned, parsed, newSuggestions, autoAccepted };
 }
