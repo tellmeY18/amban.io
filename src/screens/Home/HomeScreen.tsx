@@ -31,6 +31,7 @@ import ScoreCard from "./components/ScoreCard";
 import DailyLogPrompt from "./components/DailyLogPrompt";
 import UpcomingPayments from "./components/UpcomingPayments";
 import InsightCarousel from "./components/InsightCarousel";
+import UpdateBanner from "./components/UpdateBanner";
 
 import BottomSheet from "../../components/ui/BottomSheet";
 import CurrencyInput from "../../components/ui/CurrencyInput";
@@ -466,6 +467,8 @@ const HomeScreen: React.FC = () => {
             gap: "var(--space-md)",
           }}
         >
+          <UpdateBanner />
+
           <GreetingHeader />
 
           <TopWarningBanner warnings={score.warnings} />
