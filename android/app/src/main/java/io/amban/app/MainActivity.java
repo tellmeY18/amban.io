@@ -32,7 +32,7 @@ public class MainActivity extends BridgeActivity {
     }
 
     @Override
-    protected void onResume() {
+    public void onResume() {
         super.onResume();
         // Re-check on resume in case permission was just granted
         scheduleSmsWorkerIfPermitted();
