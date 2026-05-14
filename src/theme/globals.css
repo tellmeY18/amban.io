@@ -149,13 +149,13 @@ input[type="number"] {
 /*
  * Tell Ionic's <ion-content> scroll container about the fixed
  * BottomNav so its internal scroll boundary clears the nav bar.
- * This is the SINGLE source of truth for bottom clearance —
- * .amban-screen does NOT add its own bottom padding.
+ * The system navigation bar (3-button or gesture) is handled by
+ * the native layer (MainActivity.setupSystemBars) which pads
+ * the WebView above it — CSS only needs to account for the
+ * app's own BottomNav height.
  */
 ion-content {
-  --padding-bottom: calc(
-    var(--bottom-nav-height) + var(--space-lg) + env(safe-area-inset-bottom, 0px)
-  );
+  --padding-bottom: calc(var(--bottom-nav-height) + var(--space-lg));
 }
 
 .sr-only {
