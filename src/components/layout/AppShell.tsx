@@ -188,13 +188,13 @@ const AppShell: React.FC<AppShellProps> = ({
             flexDirection: "column",
             minHeight: 0,
             width: "100%",
-            // Leave room for the fixed bottom nav so scrollable content
-            // doesn't hide under it. When the nav is hidden, no padding
-            // is added. The extra safe-area inset keeps modern gesture
-            // bars from clipping the last row of content.
-            paddingBottom: hideNav
-              ? "env(safe-area-inset-bottom, 0px)"
-              : "calc(var(--bottom-nav-height) + env(safe-area-inset-bottom, 0px))",
+            // IonContent manages its own scroll container internally.
+            // Bottom padding for the fixed BottomNav is handled by
+            // .amban-screen in globals.css (on the inner content) and
+            // --padding-bottom on IonContent. We do NOT add padding
+            // here — that would shift the entire IonPage frame down,
+            // causing the nav bar and content to superimpose.
+            paddingBottom: hideNav ? "env(safe-area-inset-bottom, 0px)" : undefined,
           }}
         >
           {children}
