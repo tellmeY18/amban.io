@@ -25,6 +25,12 @@ export type CategoryKey =
   | "transport"
   | "shopping"
   | "health"
+  | "education"
+  | "entertainment"
+  | "personal"
+  | "gifts"
+  | "travel"
+  | "investments"
   | "other";
 
 export interface CategoryDefinition {
@@ -119,6 +125,48 @@ export const CATEGORIES: ReadonlyArray<CategoryDefinition> = [
     icon: "medkit-outline",
     colorToken: "--color-cat-health",
     colorHex: "#66BB6A",
+  },
+  {
+    key: "education",
+    label: "Education",
+    icon: "school-outline",
+    colorToken: "--color-cat-education",
+    colorHex: "#5C6BC0",
+  },
+  {
+    key: "entertainment",
+    label: "Entertainment",
+    icon: "film-outline",
+    colorToken: "--color-cat-entertainment",
+    colorHex: "#FF7043",
+  },
+  {
+    key: "personal",
+    label: "Personal Care",
+    icon: "body-outline",
+    colorToken: "--color-cat-personal",
+    colorHex: "#CE93D8",
+  },
+  {
+    key: "gifts",
+    label: "Gifts & Donations",
+    icon: "gift-outline",
+    colorToken: "--color-cat-gifts",
+    colorHex: "#FF8A65",
+  },
+  {
+    key: "travel",
+    label: "Travel",
+    icon: "airplane-outline",
+    colorToken: "--color-cat-travel",
+    colorHex: "#4DD0E1",
+  },
+  {
+    key: "investments",
+    label: "Investments & Savings",
+    icon: "trending-up-outline",
+    colorToken: "--color-cat-investments",
+    colorHex: "#FFD54F",
   },
   {
     key: "other",

@@ -92,6 +92,11 @@ import {
   bagHandleOutline,
   medkitOutline,
   ellipsisHorizontalOutline,
+  schoolOutline,
+  filmOutline,
+  bodyOutline,
+  giftOutline,
+  airplaneOutline,
 } from "ionicons/icons";
 
 import type { CategoryKey } from "../constants/categories";
@@ -188,6 +193,12 @@ export const CATEGORY_ICONS: Record<CategoryKey, string> = {
   transport: carOutline,
   shopping: bagHandleOutline,
   health: medkitOutline,
+  education: schoolOutline,
+  entertainment: filmOutline,
+  personal: bodyOutline,
+  gifts: giftOutline,
+  travel: airplaneOutline,
+  investments: trendingUpOutline,
   other: ellipsisHorizontalOutline,
 };
 

@@ -263,6 +263,103 @@ const InsightCard: React.FC<{ insight: Insight }> = ({ insight }) => {
   );
 };
 
+/* ------------------------------------------------------------------
+ * Monthly Summary — key stats for the current calendar month.
+ * ------------------------------------------------------------------ */
+
+const MonthlySummary: React.FC<{
+  totalThisMonth: number;
+  dailyAvg: number;
+  projectedMonthEnd: number;
+  daysLogged: number;
+}> = ({ totalThisMonth, dailyAvg, projectedMonthEnd, daysLogged }) => (
+  <Section title="This Month">
+    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "var(--space-sm)" }}>
+      <div
+        style={{
+          padding: "var(--space-sm)",
+          borderRadius: "var(--radius-sm)",
+          backgroundColor: "var(--surface-sunken)",
+        }}
+      >
+        <div style={{ fontSize: "var(--text-caption)", color: "var(--text-muted)" }}>
+          Total Spent
+        </div>
+        <div
+          style={{
+            fontSize: "var(--text-h2)",
+            fontWeight: "var(--font-weight-bold)",
+            color: "var(--text-strong)",
+          }}
+        >
+          {formatINR(Math.round(totalThisMonth))}
+        </div>
+      </div>
+      <div
+        style={{
+          padding: "var(--space-sm)",
+          borderRadius: "var(--radius-sm)",
+          backgroundColor: "var(--surface-sunken)",
+        }}
+      >
+        <div style={{ fontSize: "var(--text-caption)", color: "var(--text-muted)" }}>
+          Daily Average
+        </div>
+        <div
+          style={{
+            fontSize: "var(--text-h2)",
+            fontWeight: "var(--font-weight-bold)",
+            color: "var(--text-strong)",
+          }}
+        >
+          {formatINR(Math.round(dailyAvg))}
+        </div>
+      </div>
+      <div
+        style={{
+          padding: "var(--space-sm)",
+          borderRadius: "var(--radius-sm)",
+          backgroundColor: "var(--surface-sunken)",
+        }}
+      >
+        <div style={{ fontSize: "var(--text-caption)", color: "var(--text-muted)" }}>
+          Projected Month-End
+        </div>
+        <div
+          style={{
+            fontSize: "var(--text-h2)",
+            fontWeight: "var(--font-weight-bold)",
+            color: projectedMonthEnd < 0 ? "var(--color-score-warning)" : "var(--text-strong)",
+          }}
+        >
+          {formatINR(Math.round(Math.abs(projectedMonthEnd)))}
+          {projectedMonthEnd < 0 ? " short" : ""}
+        </div>
+      </div>
+      <div
+        style={{
+          padding: "var(--space-sm)",
+          borderRadius: "var(--radius-sm)",
+          backgroundColor: "var(--surface-sunken)",
+        }}
+      >
+        <div style={{ fontSize: "var(--text-caption)", color: "var(--text-muted)" }}>
+          Days Logged
+        </div>
+        <div
+          style={{
+            fontSize: "var(--text-h2)",
+            fontWeight: "var(--font-weight-bold)",
+            color: "var(--text-strong)",
+          }}
+        >
+          {daysLogged}
+        </div>
+      </div>
+    </div>
+  </Section>
+);
+
 const InsightsScreen: React.FC = () => {
   const score = useAmbanScore();
   const { insights } = useInsights({ capped: false });
@@ -287,6 +384,33 @@ const InsightsScreen: React.FC = () => {
 
   const enoughLogs = logs.length >= STREAK_MIN_DAYS;
   const todayDate = useMemo(() => todayStartOfDay(), []);
+
+  // Monthly summary
+  const currentMonth = todayDate.getMonth();
+  const currentYear = todayDate.getFullYear();
+  const thisMonthLogs = useMemo(
+    () =>
+      logs.filter((l) => {
+        const d = new Date(l.logDate);
+        return d.getMonth() === currentMonth && d.getFullYear() === currentYear;
+      }),
+    [logs, currentMonth, currentYear],
+  );
+  const totalThisMonth = thisMonthLogs.reduce((sum, l) => sum + l.spent, 0) + monthlyRecurring;
+  const dailyAvgThisMonth =
+    thisMonthLogs.length > 0
+      ? thisMonthLogs.reduce((sum, l) => sum + l.spent, 0) / thisMonthLogs.length
+      : 0;
+  const daysLeftInMonth =
+    new Date(currentYear, currentMonth + 1, 0).getDate() - todayDate.getDate();
+  const projectedMonthEnd =
+    score.effectiveBalance - dailyAvgThisMonth * daysLeftInMonth - score.upcomingRecurring;
+
+  // Discretionary (daily logged) spend this month vs recurring
+  const discretionaryThisMonth = thisMonthLogs.reduce((sum, l) => sum + l.spent, 0);
+  const totalCombined = discretionaryThisMonth + monthlyRecurring;
+  const discretionaryPct = totalCombined > 0 ? (discretionaryThisMonth / totalCombined) * 100 : 0;
+  const recurringPct = totalCombined > 0 ? (monthlyRecurring / totalCombined) * 100 : 0;
 
   return (
     <IonPage>
@@ -375,7 +499,91 @@ const InsightsScreen: React.FC = () => {
             )}
           </Section>
 
-          {/* 2. Category breakdown */}
+          {/* 2. Monthly summary */}
+          <MonthlySummary
+            totalThisMonth={totalThisMonth}
+            dailyAvg={dailyAvgThisMonth}
+            projectedMonthEnd={projectedMonthEnd}
+            daysLogged={thisMonthLogs.length}
+          />
+
+          {/* 3. Recurring vs Discretionary */}
+          {totalCombined > 0 ? (
+            <Section
+              title="Recurring vs Discretionary"
+              subtitle="Fixed bills vs day-to-day spending this month"
+            >
+              <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-xs)" }}>
+                <div
+                  style={{
+                    width: "100%",
+                    height: 14,
+                    borderRadius: "var(--radius-pill)",
+                    backgroundColor: "var(--surface-sunken)",
+                    overflow: "hidden",
+                    display: "flex",
+                  }}
+                  role="progressbar"
+                  aria-label="Recurring vs discretionary spend"
+                >
+                  <div
+                    style={{
+                      height: "100%",
+                      width: `${recurringPct}%`,
+                      backgroundColor: "var(--color-score-good)",
+                      transition: "width var(--motion-base) var(--motion-ease-out)",
+                    }}
+                  />
+                  <div
+                    style={{
+                      height: "100%",
+                      width: `${discretionaryPct}%`,
+                      backgroundColor: "var(--color-primary)",
+                      transition: "width var(--motion-base) var(--motion-ease-out)",
+                    }}
+                  />
+                </div>
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    fontSize: "var(--text-caption)",
+                    color: "var(--text-muted)",
+                  }}
+                >
+                  <span>
+                    <span
+                      style={{
+                        display: "inline-block",
+                        width: 8,
+                        height: 8,
+                        borderRadius: "var(--radius-pill)",
+                        backgroundColor: "var(--color-score-good)",
+                        marginRight: 4,
+                      }}
+                    />
+                    Recurring {formatINR(monthlyRecurring)} ({formatPercent(recurringPct)})
+                  </span>
+                  <span>
+                    <span
+                      style={{
+                        display: "inline-block",
+                        width: 8,
+                        height: 8,
+                        borderRadius: "var(--radius-pill)",
+                        backgroundColor: "var(--color-primary)",
+                        marginRight: 4,
+                      }}
+                    />
+                    Discretionary {formatINR(discretionaryThisMonth)} (
+                    {formatPercent(discretionaryPct)})
+                  </span>
+                </div>
+              </div>
+            </Section>
+          ) : null}
+
+          {/* 4. Category breakdown */}
           <Section title="Where the money goes" subtitle="Recurring + daily spend, by category">
             {breakdown.length === 0 ? (
               <p
@@ -388,49 +596,115 @@ const InsightsScreen: React.FC = () => {
                 Add recurring payments or category-tagged logs to see this breakdown.
               </p>
             ) : (
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "minmax(0, 140px) 1fr",
-                  gap: "var(--space-md)",
-                  alignItems: "center",
-                }}
-              >
-                <div style={{ width: "100%", height: 140 }}>
-                  <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Pie
-                        data={breakdown}
-                        dataKey="amount"
-                        nameKey="label"
-                        innerRadius={36}
-                        outerRadius={64}
-                        paddingAngle={1}
-                      >
-                        {breakdown.map((slice) => (
-                          <Cell key={slice.key} fill={slice.color} />
-                        ))}
-                      </Pie>
-                      <Tooltip
-                        contentStyle={{
-                          backgroundColor: "var(--surface-raised)",
-                          border: "1px solid var(--divider)",
-                          borderRadius: 8,
-                          fontSize: "var(--text-caption)",
-                        }}
-                        formatter={(value: number) => formatINR(value)}
-                      />
-                    </PieChart>
-                  </ResponsiveContainer>
+              <>
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "minmax(0, 140px) 1fr",
+                    gap: "var(--space-md)",
+                    alignItems: "center",
+                  }}
+                >
+                  <div style={{ width: "100%", height: 140 }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie
+                          data={breakdown}
+                          dataKey="amount"
+                          nameKey="label"
+                          innerRadius={36}
+                          outerRadius={64}
+                          paddingAngle={1}
+                        >
+                          {breakdown.map((slice) => (
+                            <Cell key={slice.key} fill={slice.color} />
+                          ))}
+                        </Pie>
+                        <Tooltip
+                          contentStyle={{
+                            backgroundColor: "var(--surface-raised)",
+                            border: "1px solid var(--divider)",
+                            borderRadius: 8,
+                            fontSize: "var(--text-caption)",
+                          }}
+                          formatter={(value: number) => formatINR(value)}
+                        />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </div>
+                  <div
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: "var(--space-xs)",
+                    }}
+                  >
+                    {breakdown.slice(0, 6).map((slice) => {
+                      const total = breakdown.reduce((s, b) => s + b.amount, 0);
+                      const pct = total > 0 ? (slice.amount / total) * 100 : 0;
+                      return (
+                        <div
+                          key={slice.key}
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "var(--space-xs)",
+                            fontSize: "var(--text-caption)",
+                            minWidth: 0,
+                          }}
+                        >
+                          <span
+                            aria-hidden="true"
+                            style={{
+                              width: 10,
+                              height: 10,
+                              borderRadius: "var(--radius-pill)",
+                              backgroundColor: slice.color,
+                              flexShrink: 0,
+                            }}
+                          />
+                          <IonIcon
+                            icon={CATEGORY_ICONS[slice.key]}
+                            aria-hidden="true"
+                            style={{ color: "var(--text-muted)" }}
+                          />
+                          <span
+                            style={{
+                              flex: 1,
+                              color: "var(--text-strong)",
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {CATEGORY_BY_KEY[slice.key].label}
+                          </span>
+                          <span
+                            style={{
+                              color: "var(--text-muted)",
+                              fontVariantNumeric: "tabular-nums",
+                            }}
+                          >
+                            {formatPercent(pct)}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
+
+                {/* Per-category detail rows */}
                 <div
                   style={{
                     display: "flex",
                     flexDirection: "column",
                     gap: "var(--space-xs)",
+                    marginTop: "var(--space-sm)",
+                    borderTop: "1px solid var(--divider)",
+                    paddingTop: "var(--space-sm)",
                   }}
                 >
-                  {breakdown.slice(0, 6).map((slice) => {
+                  {breakdown.map((slice) => {
                     const total = breakdown.reduce((s, b) => s + b.amount, 0);
                     const pct = total > 0 ? (slice.amount / total) * 100 : 0;
                     return (
@@ -439,54 +713,81 @@ const InsightsScreen: React.FC = () => {
                         style={{
                           display: "flex",
                           alignItems: "center",
-                          gap: "var(--space-xs)",
+                          gap: "var(--space-sm)",
                           fontSize: "var(--text-caption)",
-                          minWidth: 0,
+                          padding: "var(--space-xs) 0",
                         }}
                       >
-                        <span
-                          aria-hidden="true"
-                          style={{
-                            width: 10,
-                            height: 10,
-                            borderRadius: "var(--radius-pill)",
-                            backgroundColor: slice.color,
-                            flexShrink: 0,
-                          }}
-                        />
                         <IonIcon
                           icon={CATEGORY_ICONS[slice.key]}
                           aria-hidden="true"
-                          style={{ color: "var(--text-muted)" }}
+                          style={{
+                            color: slice.color,
+                            fontSize: "var(--text-h3)",
+                            flexShrink: 0,
+                          }}
                         />
-                        <span
-                          style={{
-                            flex: 1,
-                            color: "var(--text-strong)",
-                            overflow: "hidden",
-                            textOverflow: "ellipsis",
-                            whiteSpace: "nowrap",
-                          }}
-                        >
-                          {CATEGORY_BY_KEY[slice.key].label}
-                        </span>
-                        <span
-                          style={{
-                            color: "var(--text-muted)",
-                            fontVariantNumeric: "tabular-nums",
-                          }}
-                        >
-                          {formatPercent(pct)}
-                        </span>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div
+                            style={{
+                              display: "flex",
+                              justifyContent: "space-between",
+                              alignItems: "baseline",
+                              marginBottom: 2,
+                            }}
+                          >
+                            <span
+                              style={{
+                                color: "var(--text-strong)",
+                                fontWeight: "var(--font-weight-medium)",
+                                overflow: "hidden",
+                                textOverflow: "ellipsis",
+                                whiteSpace: "nowrap",
+                              }}
+                            >
+                              {CATEGORY_BY_KEY[slice.key].label}
+                            </span>
+                            <span
+                              style={{
+                                color: "var(--text-muted)",
+                                fontVariantNumeric: "tabular-nums",
+                                flexShrink: 0,
+                                marginLeft: "var(--space-xs)",
+                              }}
+                            >
+                              {formatINR(Math.round(slice.amount))} · {formatPercent(pct)}
+                            </span>
+                          </div>
+                          {/* Mini progress bar */}
+                          <div
+                            style={{
+                              width: "100%",
+                              height: 4,
+                              borderRadius: "var(--radius-pill)",
+                              backgroundColor: "var(--surface-sunken)",
+                              overflow: "hidden",
+                            }}
+                          >
+                            <div
+                              style={{
+                                height: "100%",
+                                width: `${Math.min(100, pct)}%`,
+                                backgroundColor: slice.color,
+                                borderRadius: "var(--radius-pill)",
+                                transition: "width var(--motion-base) var(--motion-ease-out)",
+                              }}
+                            />
+                          </div>
+                        </div>
                       </div>
                     );
                   })}
                 </div>
-              </div>
+              </>
             )}
           </Section>
 
-          {/* 3. Full insight list */}
+          {/* 5. Full insight list */}
           <Section title="What we noticed" subtitle={`${formatNumber(insights.length)} insights`}>
             {insights.length === 0 ? (
               <p
@@ -507,7 +808,7 @@ const InsightsScreen: React.FC = () => {
             )}
           </Section>
 
-          {/* 4. Recurring share-of-income bar */}
+          {/* 6. Recurring share-of-income bar */}
           <Section
             title="Recurring vs income"
             subtitle="What share of your monthly income is already committed"

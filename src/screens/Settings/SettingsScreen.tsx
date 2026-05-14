@@ -782,8 +782,8 @@ const SettingsScreen: React.FC = () => {
                 lineHeight: "var(--line-height-body)",
               }}
             >
-              Your data lives only on this device. amban makes no network requests. No accounts, no
-              tracking, no cloud.
+              Your data lives only on this device. No accounts, no tracking, no cloud. The only
+              network call is a periodic check for app updates from GitHub.
             </span>
             <span
               style={{
@@ -811,6 +811,25 @@ const SettingsScreen: React.FC = () => {
               }}
             >
               Read the privacy statement →
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                window.open("https://github.com/tellmeY18/amban.io", "_blank");
+              }}
+              style={{
+                alignSelf: "flex-start",
+                background: "transparent",
+                border: "none",
+                padding: 0,
+                color: "var(--color-primary)",
+                fontSize: "var(--text-caption)",
+                fontWeight: "var(--font-weight-semibold)",
+                cursor: "pointer",
+                textDecoration: "underline",
+              }}
+            >
+              GitHub → tellmeY18/amban.io
             </button>
           </article>
 

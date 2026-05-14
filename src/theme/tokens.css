@@ -40,6 +40,12 @@
   --color-cat-shopping: #ec407a;
   --color-cat-health: #66bb6a;
   --color-cat-other: #9aa0a6;
+  --color-cat-education: #5c6bc0;
+  --color-cat-entertainment: #ff7043;
+  --color-cat-personal: #ce93d8;
+  --color-cat-gifts: #ff8a65;
+  --color-cat-travel: #4dd0e1;
+  --color-cat-investments: #ffd54f;
 
   /* ---------- Typography ---------- */
   --font-display: "DM Sans", system-ui, -apple-system, sans-serif;

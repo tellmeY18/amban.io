@@ -97,6 +97,12 @@ function applyThemeAttribute(effective: EffectiveTheme): void {
   // `color-scheme` lets the browser pick matching scrollbars and form
   // control defaults — cheap polish that costs nothing to set here.
   document.documentElement.style.colorScheme = effective;
+  // Sync Ionic's class-based dark palette so Ionic components match
+  if (effective === "dark") {
+    document.documentElement.classList.add("ion-palette-dark");
+  } else {
+    document.documentElement.classList.remove("ion-palette-dark");
+  }
 }
 
 /**
