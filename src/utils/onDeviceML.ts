@@ -304,7 +304,7 @@ export interface ClassificationResult {
  * model file present). Falls back to keyword matching on web or when
  * the model isn't shipped yet.
  *
- * @param counterparty  The merchant or counterparty name from SMS.
+ * @param counterparty  The merchant or counterparty name.
  * @returns             Category, confidence (0-1), and which engine was used.
  */
 export async function categorizeMerchant(
@@ -457,7 +457,7 @@ export interface SpendingPattern {
 }
 
 /**
- * Analyze spending patterns from logs and SMS transactions.
+ * Analyze spending patterns from logs and transactions.
  */
 export async function analyzeSpendingPatterns(
   logs: ReadonlyArray<{ logDate: string; spent: number }>,

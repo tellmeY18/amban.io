@@ -50,7 +50,7 @@ import ManageIncome from "./screens/Settings/ManageIncome";
 import ManageRecurring from "./screens/Settings/ManageRecurring";
 import NotificationSettings from "./screens/Settings/NotificationSettings";
 import PrivacyStatement from "./screens/Settings/PrivacyStatement";
-import SmsCapture from "./screens/Settings/SmsCapture";
+
 import OnboardingStack from "./screens/Onboarding/OnboardingStack";
 import StyleGuideScreen from "./screens/StyleGuide/StyleGuideScreen";
 
@@ -113,26 +113,7 @@ const LifecycleSubscribers: React.FC = () => {
     // v8; we treat the returned handle best-effort.
     let removeHandle: { remove: () => Promise<void> } | null = null;
     CapacitorApp.addListener("appStateChange", ({ isActive }) => {
-      if (isActive) {
-        void refreshOnTick();
-        // Aggressive SMS scan on every resume
-        void (async () => {
-          try {
-            const { runAggressiveScan, isSmsCaptureActive } = await import("./utils/smsScan");
-            const active = await isSmsCaptureActive();
-            if (active) {
-              await runAggressiveScan();
-              // Refresh the suggestions store so UI updates
-              const { useSmsSuggestionsStore } = await import("./stores/smsSuggestionsStore");
-              await useSmsSuggestionsStore.getState().refreshPending();
-            }
-          } catch (err) {
-            if (import.meta.env.DEV) {
-              console.warn("[amban.lifecycle] SMS scan failed:", err);
-            }
-          }
-        })();
-      }
+      if (isActive) void refreshOnTick();
     })
       .then((h) => {
         if (cancelled) void h.remove();
@@ -212,7 +193,7 @@ const AuthenticatedRoutes: React.FC = () => (
         <Route exact path="/settings/income" component={ManageIncome} />
         <Route exact path="/settings/recurring" component={ManageRecurring} />
         <Route exact path="/settings/notifications" component={NotificationSettings} />
-        <Route exact path="/settings/sms-capture" component={SmsCapture} />
+
         <Route exact path="/settings/privacy" component={PrivacyStatement} />
         {IS_DEV ? <Route exact path="/styleguide" component={StyleGuideScreen} /> : null}
         <Route exact path="/">

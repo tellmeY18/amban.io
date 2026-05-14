@@ -137,12 +137,3 @@ export const COFFEE_MATH_THRESHOLDS: ReadonlyArray<{
   { minAvgDailySpend: 1000, product: "movieTicket" },
   { minAvgDailySpend: 500, product: "chai" },
 ];
-
-// ------------------------------------------------------------
-// SMS parser minimum confidence (§15.5)
-//   Parsed SMS results with a confidence score below this
-//   threshold are silently dropped. Prevents low-quality
-//   partial parses from cluttering the suggestion inbox.
-// ------------------------------------------------------------
-
-export const SMS_MIN_CONFIDENCE = 0.5;

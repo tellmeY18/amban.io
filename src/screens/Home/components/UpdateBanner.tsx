@@ -1,24 +1,15 @@
 /**
  * screens/Home/components/UpdateBanner.tsx — in-app update prompt.
  *
- * Source of truth: CLAUDE.md §16.7 (UI States) and §16.8 (Placement).
- *
- * Compact banner fixed at the top of the Home screen, above all other
- * content. Non-dismissable — stays visible until the user installs the
- * update or the app is relaunched at the newer version.
+ * Auto-downloads the APK in the background when an update is detected.
+ * The user only sees progress → then a single "Install now" button.
  *
  * States:
- *   - idle / checking → not rendered (null)
- *   - available → "Update available vX.Y.Z" + Download button
+ *   - idle / checking / available → not rendered (download is automatic)
  *   - downloading → progress bar with percentage
- *   - ready → "Ready to install vX.Y.Z" + Install button
+ *   - ready → "✅ vX.Y.Z ready" + Install now button
  *   - error → "Download failed" + Retry button
  *   - installing → "Installing…" (transient)
- *
- * Design rules:
- *   - Uses CSS custom properties from the design system.
- *   - No external props — calls useAppUpdater() internally.
- *   - Inline styles following the same pattern as ScoreCard.tsx.
  */
 
 import type { CSSProperties } from "react";
@@ -81,15 +72,6 @@ const progressTrackStyle: CSSProperties = {
   overflow: "hidden",
 };
 
-const releaseNotesStyle: CSSProperties = {
-  fontSize: "var(--text-caption)",
-  color: "rgba(255, 255, 255, 0.85)",
-  overflow: "hidden",
-  textOverflow: "ellipsis",
-  whiteSpace: "nowrap",
-  maxWidth: "100%",
-};
-
 /* ------------------------------------------------------------------
  * Sub-components
  * ------------------------------------------------------------------ */
@@ -120,7 +102,6 @@ const ProgressBar: React.FC<{ progress: number }> = ({ progress }) => (
 
 /** Statuses that cause the banner to render. */
 const VISIBLE_STATUSES: Set<UpdateStatus> = new Set([
-  "available",
   "downloading",
   "ready",
   "installing",
@@ -128,41 +109,19 @@ const VISIBLE_STATUSES: Set<UpdateStatus> = new Set([
 ]);
 
 const UpdateBanner: React.FC = () => {
-  const { status, version, releaseNotes, progress, startDownload, install, checkForUpdate } =
-    useAppUpdater();
+  const { status, version, progress, install, checkForUpdate } = useAppUpdater();
 
-  // Don't render when idle or checking.
+  // Don't render when idle, checking, or available (download starts automatically)
   if (!VISIBLE_STATUSES.has(status)) return null;
 
   const versionLabel = version ? `v${version}` : "";
 
   return (
     <div style={bannerStyle} role="alert" aria-live="polite">
-      {status === "available" && (
-        <>
-          <div style={rowStyle}>
-            <span>Update available: {versionLabel}</span>
-            <button
-              type="button"
-              style={outlineButtonStyle}
-              onClick={() => void startDownload()}
-              aria-label={`Download update ${versionLabel}`}
-            >
-              Download
-            </button>
-          </div>
-          {releaseNotes ? (
-            <span style={releaseNotesStyle} title={releaseNotes}>
-              {releaseNotes}
-            </span>
-          ) : null}
-        </>
-      )}
-
       {status === "downloading" && (
         <>
           <div style={rowStyle}>
-            <span>Downloading {versionLabel}…</span>
+            <span>Downloading update {versionLabel}…</span>
             <span style={{ fontSize: "var(--text-caption)", opacity: 0.9 }}>{progress}%</span>
           </div>
           <ProgressBar progress={progress} />
@@ -171,14 +130,14 @@ const UpdateBanner: React.FC = () => {
 
       {status === "ready" && (
         <div style={rowStyle}>
-          <span>Ready to install {versionLabel}</span>
+          <span>✅ {versionLabel} ready</span>
           <button
             type="button"
             style={filledButtonStyle}
             onClick={() => void install()}
             aria-label={`Install update ${versionLabel}`}
           >
-            Install
+            Install now
           </button>
         </div>
       )}

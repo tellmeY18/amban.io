@@ -16,15 +16,11 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Capacitor } from "@capacitor/core";
 
-import { useSmsSuggestionsStore } from "../stores/smsSuggestionsStore";
 import { useDailyStore } from "../stores/dailyStore";
 import {
-  categorizeMerchant,
   detectAnomaly,
   checkMLAvailability,
-  type ClassificationResult,
   type AnomalyResult,
   type SpendingFeatures,
 } from "../utils/onDeviceML";
@@ -39,7 +35,7 @@ export interface MLEnrichedTransaction {
   counterparty: string | null;
   receivedAt: string;
   /** ML-powered category classification. */
-  classification: ClassificationResult | null;
+  classification: { category: string; confidence: number; source: string } | null;
 }
 
 export interface MLInsightData {
@@ -98,7 +94,6 @@ function computeSpendStats(logs: Array<{ spent: number }>): {
  * subscribe to this hook.
  */
 export function useMLInsights(): MLInsightData {
-  const suggestions = useSmsSuggestionsStore((s) => s.pending);
   const logs = useDailyStore((s) => s.logs);
 
   const [modelsAvailable, setModelsAvailable] = useState({
@@ -130,35 +125,13 @@ export function useMLInsights(): MLInsightData {
   // Run ML inference when data changes
   useEffect(() => {
     let cancelled = false;
-    const isAndroid = Capacitor.getPlatform() === "android";
 
     (async () => {
       setLoading(true);
 
-      // --- Merchant classification ---
+      // --- Merchant classification (no transaction source connected) ---
       const enriched: MLEnrichedTransaction[] = [];
-      for (const s of suggestions.slice(0, 50)) {
-        // Limit to avoid perf issues
-        let classification: ClassificationResult | null = null;
-        if (s.counterparty && isAndroid) {
-          try {
-            classification = await categorizeMerchant(s.counterparty);
-          } catch {
-            // Fallback handled inside categorizeMerchant
-          }
-        }
-        enriched.push({
-          amount: s.amount,
-          direction: s.direction,
-          counterparty: s.counterparty,
-          receivedAt: s.receivedAt,
-          classification,
-        });
-      }
-
-      if (!cancelled) {
-        setEnrichedTransactions(enriched);
-      }
+      setEnrichedTransactions(enriched);
 
       // --- Anomaly detection on recent logs ---
       const recentLogs = logs.slice(0, 14); // Last 2 weeks
@@ -206,7 +179,7 @@ export function useMLInsights(): MLInsightData {
     return () => {
       cancelled = true;
     };
-  }, [suggestions, logs, refreshTrigger]);
+  }, [logs, refreshTrigger]);
 
   const refresh = useCallback(() => {
     setRefreshTrigger((t) => t + 1);

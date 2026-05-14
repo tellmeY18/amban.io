@@ -62,7 +62,7 @@ export interface AddIncomeSheetProps {
   isOpen: boolean;
   /** Called when the sheet dismisses (backdrop, drag-down, save, or cancel). */
   onDismiss: () => void;
-  /** Pre-fill fields (e.g. from SMS suggestion acceptance). */
+  /** Pre-fill fields (e.g. from external source acceptance). */
   prefill?: {
     amount?: number;
     label?: string;

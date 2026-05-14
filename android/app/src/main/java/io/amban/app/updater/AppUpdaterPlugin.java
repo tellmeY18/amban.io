@@ -44,8 +44,11 @@ import java.util.concurrent.Executors;
 public class AppUpdaterPlugin extends Plugin {
 
     private static final String TAG = "AppUpdaterPlugin";
+    // NOTE: /releases/latest ONLY returns non-prerelease, non-draft releases.
+    // All amban alpha/beta builds are published as prerelease, so we must use
+    // /releases (returns all) and pick the newest one ourselves.
     private static final String GITHUB_API_URL =
-            "https://api.github.com/repos/tellmeY18/amban.io/releases/latest";
+            "https://api.github.com/repos/tellmeY18/amban.io/releases?per_page=1";
     private static final String USER_AGENT = "amban-app-updater/1.0";
     private static final int CONNECT_TIMEOUT_MS = 15_000;
     private static final int READ_TIMEOUT_MS = 30_000;
@@ -79,7 +82,27 @@ public class AppUpdaterPlugin extends Plugin {
                 String responseBody = readStream(conn.getInputStream());
                 conn.disconnect();
 
-                JSONObject release = new JSONObject(responseBody);
+                // Response is an array of releases (newest first).
+                // Pick the first non-draft release (prerelease is fine).
+                JSONArray releases = new JSONArray(responseBody);
+                if (releases.length() == 0) {
+                    resolveNoUpdate(call, currentVersion);
+                    return;
+                }
+
+                JSONObject release = null;
+                for (int i = 0; i < releases.length(); i++) {
+                    JSONObject r = releases.getJSONObject(i);
+                    if (!r.optBoolean("draft", false)) {
+                        release = r;
+                        break;
+                    }
+                }
+                if (release == null) {
+                    resolveNoUpdate(call, currentVersion);
+                    return;
+                }
+
                 String tagName = release.optString("tag_name", "");
                 String releaseNotes = release.optString("body", "");
 
@@ -159,30 +182,43 @@ public class AppUpdaterPlugin extends Plugin {
                 String fileName = "amban-update-" + apkVersion + ".apk";
                 File apkFile = new File(apkDir, fileName);
 
-                // Download
-                conn = (HttpURLConnection) new URL(downloadUrl).openConnection();
-                conn.setRequestMethod("GET");
-                conn.setRequestProperty("User-Agent", USER_AGENT);
-                conn.setConnectTimeout(CONNECT_TIMEOUT_MS);
-                conn.setReadTimeout(READ_TIMEOUT_MS);
-                conn.setInstanceFollowRedirects(true);
+                // Download — follow redirects manually because HttpURLConnection
+                // sometimes fails to follow HTTPS→HTTPS redirects on some OEMs,
+                // and GitHub asset URLs go through multiple 302 hops.
+                String currentUrl = downloadUrl;
+                int maxRedirects = 5;
+                int redirectCount = 0;
 
-                int responseCode = conn.getResponseCode();
-
-                // Handle redirects manually for cross-protocol redirects
-                if (responseCode == 302 || responseCode == 301) {
-                    String redirectUrl = conn.getHeaderField("Location");
-                    conn.disconnect();
-                    conn = (HttpURLConnection) new URL(redirectUrl).openConnection();
+                while (redirectCount < maxRedirects) {
+                    conn = (HttpURLConnection) new URL(currentUrl).openConnection();
                     conn.setRequestMethod("GET");
                     conn.setRequestProperty("User-Agent", USER_AGENT);
                     conn.setConnectTimeout(CONNECT_TIMEOUT_MS);
                     conn.setReadTimeout(READ_TIMEOUT_MS);
-                    responseCode = conn.getResponseCode();
+                    conn.setInstanceFollowRedirects(false); // Handle manually
+
+                    int responseCode = conn.getResponseCode();
+
+                    if (responseCode == 301 || responseCode == 302 || responseCode == 307 || responseCode == 308) {
+                        String location = conn.getHeaderField("Location");
+                        conn.disconnect();
+                        conn = null;
+                        if (location == null || location.isEmpty()) {
+                            call.reject("Redirect with no Location header");
+                            return;
+                        }
+                        currentUrl = location;
+                        redirectCount++;
+                    } else if (responseCode == 200) {
+                        break; // We have the actual content
+                    } else {
+                        call.reject("Download failed with HTTP " + responseCode);
+                        return;
+                    }
                 }
 
-                if (responseCode != 200) {
-                    call.reject("Download failed with HTTP " + responseCode);
+                if (conn == null || conn.getResponseCode() != 200) {
+                    call.reject("Too many redirects or connection lost");
                     return;
                 }
 

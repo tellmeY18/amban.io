@@ -32,7 +32,7 @@ import { HOME_CAROUSEL_MAX, INSIGHT_DISMISS_TTL_HOURS } from "../constants/insig
 import { useAmbanScore } from "./useAmbanScore";
 import { useDailyStore } from "../stores/dailyStore";
 import { useFinanceStore } from "../stores/financeStore";
-import { useSmsSuggestionsStore } from "../stores/smsSuggestionsStore";
+
 import { today as todayStartOfDay } from "../utils/dateHelpers";
 import { INSIGHT_GENERATORS } from "../utils/insightGenerators";
 import {
@@ -167,7 +167,6 @@ function useInsightContext(): AdvancedInsightContext {
   const logs = useDailyStore((s) => s.logs);
   const incomeSources = useFinanceStore((s) => s.incomeSources);
   const recurringPayments = useFinanceStore((s) => s.recurringPayments);
-  const smsData = useSmsSuggestionsStore((s) => s.pending);
 
   return useMemo<AdvancedInsightContext>(() => {
     const today = todayStartOfDay();
@@ -203,12 +202,7 @@ function useInsightContext(): AdvancedInsightContext {
         spent: l.spent,
         scoreAtLog: l.scoreAtLog,
       })),
-      recentTransactions: smsData.map((s) => ({
-        amount: s.amount,
-        direction: s.direction,
-        counterparty: s.counterparty,
-        receivedAt: s.receivedAt,
-      })),
+      recentTransactions: [],
     };
   }, [
     score.score,
@@ -220,7 +214,6 @@ function useInsightContext(): AdvancedInsightContext {
     logs,
     incomeSources,
     recurringPayments,
-    smsData,
   ]);
 }
 

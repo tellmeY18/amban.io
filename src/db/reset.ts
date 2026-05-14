@@ -43,7 +43,7 @@ import { LocalNotifications } from "@capacitor/local-notifications";
 import { useDailyStore } from "../stores/dailyStore";
 import { useFinanceStore } from "../stores/financeStore";
 import { useSettingsStore } from "../stores/settingsStore";
-import { useSmsSuggestionsStore } from "../stores/smsSuggestionsStore";
+
 import { useUserStore } from "../stores/userStore";
 
 import { wipeDb } from "./db";
@@ -125,7 +125,6 @@ function resetAllStores(): void {
   useFinanceStore.getState().reset();
   useDailyStore.getState().reset();
   useSettingsStore.getState().reset();
-  useSmsSuggestionsStore.getState().reset();
 }
 
 /* ------------------------------------------------------------------

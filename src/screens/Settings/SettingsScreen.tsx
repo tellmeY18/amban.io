@@ -554,26 +554,22 @@ const ResetSheet: React.FC<{
  * ------------------------------------------------------------------ */
 
 const UpdateRow: React.FC = () => {
-  const { status, version, checkForUpdate, startDownload, install, progress } = useAppUpdater();
+  const { status, version, checkForUpdate, install, progress } = useAppUpdater();
 
   let label = "Check for updates";
   let value = "Up to date";
   let handler: (() => void) | undefined = () => void checkForUpdate();
 
-  if (status === "checking") {
+  if (status === "checking" || status === "available") {
     value = "Checking…";
     handler = undefined;
-  } else if (status === "available") {
-    label = `Update available: v${version}`;
-    value = "Download";
-    handler = () => void startDownload();
   } else if (status === "downloading") {
     label = `Downloading v${version}`;
     value = `${progress}%`;
     handler = undefined;
   } else if (status === "ready") {
-    label = `v${version} ready`;
-    value = "Install";
+    label = `✅ v${version} ready`;
+    value = "Install now";
     handler = () => void install();
   } else if (status === "error") {
     label = "Download failed";
@@ -699,14 +695,7 @@ const SettingsScreen: React.FC = () => {
             value={notificationsEnabled ? formatTime12h(notificationTime) : "Off"}
             onSelect={() => history.push("/settings/notifications")}
           />
-          {Capacitor.getPlatform() === "android" ? (
-            <SettingsRow
-              icon={Icons.action.add}
-              label="SMS Capture"
-              value="Connected Sources"
-              onSelect={() => history.push("/settings/sms-capture")}
-            />
-          ) : null}
+
           <SettingsRow
             icon={Icons.action.forward}
             label="Export data"

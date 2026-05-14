@@ -78,12 +78,6 @@ export const PreferenceKey = {
   /** JSON array — dismissed insight records (id + timestamp). */
   DismissedInsights: "amban.dismissed_insights",
 
-  // ---- SMS capture (Android only, §15) ----
-  /** ISO timestamp — last SMS scan completion. */
-  LastSmsScanAt: "amban.last_sms_scan_at",
-  /** '1' when SMS capture is enabled by the user. */
-  SmsCaptureEnabled: "amban.sms_capture_enabled",
-
   // ---- App metadata ----
   /** Semver string — last app version that completed boot. */
   LastSeenAppVersion: "amban.last_seen_app_version",

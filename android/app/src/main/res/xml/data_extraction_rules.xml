@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Data extraction rules for Android 12+ (API 31+).
+    Required when android:allowBackup="true" and targeting API 31+.
+
+    amban.io is 100% local — all user data lives in SQLite and
+    Capacitor Preferences. We allow cloud backup of everything
+    so users can restore after a device reset/migration.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <!-- Back up all app data (SQLite DB + Preferences) -->
+        <include domain="database" path="." />
+        <include domain="sharedpref" path="." />
+        <!-- Exclude cache (downloaded APKs, temp files) -->
+        <exclude domain="cache" path="." />
+    </cloud-backup>
+    <device-transfer>
+        <!-- Allow full device-to-device transfer -->
+        <include domain="database" path="." />
+        <include domain="sharedpref" path="." />
+        <exclude domain="cache" path="." />
+    </device-transfer>
+</data-extraction-rules>

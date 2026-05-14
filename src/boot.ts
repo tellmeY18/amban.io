@@ -47,7 +47,7 @@ import { migrationFlags } from "./db/preferences";
 import { useDailyStore } from "./stores/dailyStore";
 import { useFinanceStore } from "./stores/financeStore";
 import { useSettingsStore } from "./stores/settingsStore";
-import { useSmsSuggestionsStore } from "./stores/smsSuggestionsStore";
+
 import { useUserStore } from "./stores/userStore";
 
 /**
@@ -218,7 +218,6 @@ async function runHydrationStage(result: BootResult): Promise<boolean> {
       useUserStore.getState().hydrate(),
       useFinanceStore.getState().hydrate(),
       useDailyStore.getState().hydrate(),
-      useSmsSuggestionsStore.getState().hydrate(),
     ]);
     result.stages.hydration = true;
     return true;
@@ -288,7 +287,6 @@ export function isFullyHydrated(): boolean {
     useSettingsStore.getState().hydrated &&
     useUserStore.getState().hydrated &&
     useFinanceStore.getState().hydrated &&
-    useDailyStore.getState().hydrated &&
-    useSmsSuggestionsStore.getState().hydrated
+    useDailyStore.getState().hydrated
   );
 }

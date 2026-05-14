@@ -149,7 +149,19 @@ export function useAppUpdater(): UseAppUpdaterResult {
         updateInfoRef.current = info;
         setVersion(info.version);
         setReleaseNotes(info.releaseNotes || null);
-        setStatus("available");
+        // Auto-start download immediately — no user action needed.
+        // The banner will show progress, then "Tap to install".
+        setStatus("downloading");
+        setProgress(0);
+        const path = await downloadApk(info.downloadUrl, info.version, (pct) => {
+          setProgress(pct);
+        });
+        if (path) {
+          setFilePath(path);
+          setStatus("ready");
+        } else {
+          setStatus("error");
+        }
       } else {
         setStatus("idle");
       }

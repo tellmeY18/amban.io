@@ -12,7 +12,7 @@
  *   - Day-of-week pattern extraction
  *   - Time-of-month spending curves
  *   - Spending velocity (rate of daily burn)
- *   - Counterparty frequency analysis (from SMS data)
+ *   - Counterparty frequency analysis (from transaction data)
  *
  * These generators complement (not replace) the base generators in
  * insightGenerators.ts. The hook (useInsights) runs both sets.
@@ -102,11 +102,11 @@ function linearRegression(points: Array<{ x: number; y: number }>): {
 }
 
 /* ==================================================================
- * Extended InsightContext — includes SMS suggestion data
+ * Extended InsightContext — includes transaction data
  * ================================================================== */
 
 export interface AdvancedInsightContext extends InsightContext {
-  /** Recent SMS suggestions (accepted) for counterparty analysis. */
+  /** Recent transactions (accepted) for counterparty analysis. */
   recentTransactions?: ReadonlyArray<{
     amount: number;
     direction: "debit" | "credit";
@@ -248,7 +248,7 @@ export const monthEndCrunchInsight: AdvancedInsightGenerator = (ctx) => {
  *
  * For real-time alerting: checks if the accumulated spend today
  * relative to the score suggests the user is on pace to overshoot.
- * This works best with SMS auto-accept providing real-time data.
+ * This works best with real-time transaction data.
  * ================================================================== */
 export const spendingVelocityInsight: AdvancedInsightGenerator = (ctx) => {
   // This insight works with today's data
@@ -345,7 +345,7 @@ export const spendingTrendInsight: AdvancedInsightGenerator = (ctx) => {
  * §A6 — Top Merchant / Counterparty
  * "Swiggy is your #1 spend — ₹4,200 across 12 orders this month."
  *
- * Requires SMS suggestion data (accepted transactions with
+ * Requires transaction data (accepted transactions with
  * counterparty info).
  * ================================================================== */
 export const topMerchantInsight: AdvancedInsightGenerator = (ctx) => {
