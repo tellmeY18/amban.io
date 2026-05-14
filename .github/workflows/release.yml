@@ -399,19 +399,19 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.raw }}
-          name: amban ${{ steps.version.outputs.raw }} (alpha)
+          name: amban ${{ steps.version.outputs.raw }} (beta)
           draft: false
-          prerelease: true
+          prerelease: false
           generate_release_notes: true
           files: |
             ${{ steps.stage.outputs.apk }}
             ${{ steps.stage.outputs.sha }}
           body: |
-            ## amban ${{ steps.version.outputs.raw }} — alpha preview
+            ## amban ${{ steps.version.outputs.raw }} — beta
 
             > Know your number. Own your day.
 
-            This is an **alpha** build for on-device testing. It is a
+            This is a **beta** build for close testing. It is a
             *debug-signed* APK (signed with a project-owned debug keystore
             committed to the repo so every release shares the same signing
             certificate and can cleanly upgrade in place). Intended for
@@ -425,12 +425,9 @@ jobs:
                browser or file manager.
             3. Tap the APK to install.
 
-            Upgrading from a previous alpha? Just install — every release
-            from v0.1.1 onwards is signed with the same project-owned debug
-            key and will upgrade in place. (If you hit "package conflicts
-            with existing package" from a pre-v0.1.1 build, uninstall the
-            old copy with `adb uninstall io.amban.app` and reinstall. This
-            is a one-time migration.)
+            Already have amban installed? The app will **auto-download this
+            update** and prompt you to install — just tap "Install now" when
+            the banner appears.
 
             ### Verify
 
@@ -452,20 +449,17 @@ jobs:
 
             - 100% local. No accounts, no sync, no network requests.
             - Onboarding → Home → Daily Log → Insights → Settings, all wired.
-            - Two-tier logging: per-entry spend capture with end-of-day
-              confirmation, editable until local midnight.
-            - Local notifications for the daily prompt, upcoming bills, and
-              salary day.
+            - Daily spend tracking with Amban Score (safe-to-spend per day).
+            - Smart insights: anomaly detection, spending trends, patterns.
+            - Auto-update: app downloads new versions in the background.
+            - Local notifications for daily prompt, upcoming bills, salary day.
             - Light + dark themes, haptics, reduce-motion aware.
 
-            ### Known caveats for alpha
+            ### Note
 
             - Debug-signed APK (not Play-signed). Expect an
-              "unknown developer" prompt on install — this is normal for
-              side-loaded apps.
+              "unknown developer" prompt on first install.
             - iOS build is not included in this release.
-            - Data export is a best-effort JSON dump; no import path yet.
-              "Reset app" is the only clean-slate path.
 
             ---
 
