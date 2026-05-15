@@ -40,6 +40,7 @@ import { UPCOMING_PAYMENT_WARN_DAYS } from "../../constants/insightThresholds";
 
 import { useFinanceStore } from "../../stores/financeStore";
 import type { RecurringPayment } from "../../stores/financeStore";
+import { useAmbanScore } from "../../hooks/useAmbanScore";
 
 import { CATEGORY_ICONS, Icons } from "../../theme/icons";
 import { formatINR } from "../../utils/formatters";
@@ -336,10 +337,16 @@ const MarkPaidSheet: React.FC<{
   payment: RecurringPayment | null;
   onDismiss: () => void;
 }> = ({ open, payment, onDismiss }) => {
-  const latestBalance = useFinanceStore((s) => s.latestBalance);
+  const score = useAmbanScore();
   const setBalance = useFinanceStore((s) => s.setBalance);
   const markAsPaid = useFinanceStore((s) => s.markRecurringAsPaid);
-  const prefill = Math.max(0, (latestBalance?.amount ?? 0) - (payment?.amount ?? 0));
+
+  // Use the EFFECTIVE balance (snapshot minus spend since snapshot),
+  // not the raw snapshot amount. The raw snapshot is stale — it
+  // reflects the balance at the time of the last manual update,
+  // not what's actually in the user's bank account right now.
+  const currentBalance = score.ready ? score.effectiveBalance : 0;
+  const prefill = Math.max(0, Math.round(currentBalance - (payment?.amount ?? 0)));
   const [draft, setDraft] = useState<number | null>(prefill);
   const [busy, setBusy] = useState(false);
 
