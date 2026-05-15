@@ -48,6 +48,25 @@ const EMPTY_DRAFT: DraftRecurring = {
   category: DEFAULT_RECURRING_CATEGORY,
 };
 
+const RECURRING_SUGGESTIONS: ReadonlyArray<{
+  label: string;
+  category: CategoryKey;
+  icon: string;
+}> = [
+  { label: "Rent", category: "housing", icon: "home-outline" },
+  { label: "Electricity", category: "utilities", icon: "flash-outline" },
+  { label: "WiFi / Broadband", category: "utilities", icon: "wifi-outline" },
+  { label: "Mobile Recharge", category: "subscriptions", icon: "phone-portrait-outline" },
+  { label: "Netflix", category: "subscriptions", icon: "play-circle-outline" },
+  { label: "Spotify", category: "subscriptions", icon: "musical-notes-outline" },
+  { label: "Gym", category: "health", icon: "barbell-outline" },
+  { label: "Home Loan EMI", category: "emi", icon: "card-outline" },
+  { label: "Car Loan EMI", category: "emi", icon: "car-outline" },
+  { label: "Insurance Premium", category: "insurance", icon: "shield-checkmark-outline" },
+  { label: "Maid / Cook", category: "housing", icon: "person-outline" },
+  { label: "Gas Cylinder", category: "utilities", icon: "flame-outline" },
+];
+
 function validateDraft(draft: DraftRecurring): string | null {
   const label = draft.label.trim();
   if (label.length === 0) return "Give this payment a label.";
@@ -75,10 +94,12 @@ function ordinalSuffix(day: number): string {
 const RecurringRow: React.FC<{
   payment: RecurringPayment;
   onDelete: () => void;
-}> = ({ payment, onDelete }) => {
+  onEdit: () => void;
+}> = ({ payment, onDelete, onEdit }) => {
   const category = CATEGORY_BY_KEY[payment.category];
   return (
     <div
+      onClick={onEdit}
       style={{
         display: "flex",
         alignItems: "center",
@@ -88,6 +109,7 @@ const RecurringRow: React.FC<{
         borderRadius: "var(--radius-md)",
         backgroundColor: "var(--surface-raised)",
         boxShadow: "var(--shadow-card)",
+        cursor: "pointer",
       }}
     >
       <div
@@ -135,7 +157,10 @@ const RecurringRow: React.FC<{
       </div>
       <button
         type="button"
-        onClick={onDelete}
+        onClick={(e) => {
+          e.stopPropagation();
+          onDelete();
+        }}
         aria-label={`Remove ${payment.label}`}
         style={{
           minWidth: 40,
@@ -160,12 +185,24 @@ const RecurringPayments: React.FC = () => {
   const recurring = useFinanceStore((s) => s.recurringPayments);
   const addRecurring = useFinanceStore((s) => s.addRecurringPayment);
   const deleteRecurring = useFinanceStore((s) => s.deleteRecurringPayment);
+  const updateRecurring = useFinanceStore((s) => s.updateRecurringPayment);
 
   const [draft, setDraft] = useState<DraftRecurring>(EMPTY_DRAFT);
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [editingId, setEditingId] = useState<number | null>(null);
 
   const activePayments = recurring.filter((p) => p.isActive);
+
+  const handleEdit = (payment: RecurringPayment) => {
+    setEditingId(payment.id);
+    setDraft({
+      label: payment.label,
+      amount: payment.amount,
+      dueDay: String(payment.dueDay),
+      category: payment.category,
+    });
+  };
 
   const handleAdd = async () => {
     const err = validateDraft(draft);
@@ -176,14 +213,24 @@ const RecurringPayments: React.FC = () => {
     setBusy(true);
     setFormError(null);
     try {
-      await addRecurring({
-        label: draft.label.trim(),
-        amount: draft.amount ?? 0,
-        dueDay: Number(draft.dueDay),
-        category: draft.category,
-        isActive: true,
-        lastPaidDate: null,
-      });
+      if (editingId != null) {
+        await updateRecurring(editingId, {
+          label: draft.label.trim(),
+          amount: draft.amount ?? 0,
+          dueDay: Number(draft.dueDay),
+          category: draft.category,
+        });
+        setEditingId(null);
+      } else {
+        await addRecurring({
+          label: draft.label.trim(),
+          amount: draft.amount ?? 0,
+          dueDay: Number(draft.dueDay),
+          category: draft.category,
+          isActive: true,
+          lastPaidDate: null,
+        });
+      }
       setDraft({ ...EMPTY_DRAFT });
     } catch (e) {
       setFormError(e instanceof Error ? e.message : "Couldn't save. Try again.");
@@ -216,10 +263,58 @@ const RecurringPayments: React.FC = () => {
               key={payment.id}
               payment={payment}
               onDelete={() => void deleteRecurring(payment.id)}
+              onEdit={() => handleEdit(payment)}
             />
           ))}
         </div>
       ) : null}
+
+      {/* Quick-add suggestions */}
+      <div
+        style={{
+          display: "flex",
+          gap: "var(--space-xs)",
+          overflowX: "auto",
+          padding: "var(--space-xs) 0",
+          WebkitOverflowScrolling: "touch",
+        }}
+      >
+        {RECURRING_SUGGESTIONS.map((s) => (
+          <button
+            key={s.label}
+            type="button"
+            onClick={() => setDraft((d) => ({ ...d, label: s.label, category: s.category }))}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4,
+              padding: "var(--space-xs) var(--space-sm)",
+              minHeight: 36,
+              borderRadius: "var(--radius-pill)",
+              border:
+                draft.label === s.label
+                  ? `1.5px solid ${CATEGORY_BY_KEY[s.category].colorHex}`
+                  : "1.5px solid transparent",
+              backgroundColor:
+                draft.label === s.label
+                  ? `${CATEGORY_BY_KEY[s.category].colorHex}22`
+                  : "var(--surface-raised)",
+              color:
+                draft.label === s.label
+                  ? CATEGORY_BY_KEY[s.category].colorHex
+                  : "var(--text-muted)",
+              fontSize: "var(--text-caption)",
+              fontWeight: "var(--font-weight-medium)",
+              cursor: "pointer",
+              whiteSpace: "nowrap",
+              flexShrink: 0,
+            }}
+          >
+            <IonIcon icon={s.icon} aria-hidden="true" />
+            {s.label}
+          </button>
+        ))}
+      </div>
 
       <div
         style={{
@@ -387,8 +482,37 @@ const RecurringPayments: React.FC = () => {
           }}
         >
           <IonIcon icon={Icons.action.addCircle} aria-hidden="true" />
-          {busy ? "Adding…" : activePayments.length === 0 ? "Add recurring" : "Add another"}
+          {busy
+            ? "Saving…"
+            : editingId != null
+              ? "Save changes"
+              : activePayments.length === 0
+                ? "Add recurring"
+                : "Add another"}
         </button>
+
+        {editingId != null ? (
+          <button
+            type="button"
+            onClick={() => {
+              setEditingId(null);
+              setDraft({ ...EMPTY_DRAFT });
+            }}
+            style={{
+              minHeight: "var(--hit-target-min)",
+              padding: "var(--space-sm) var(--space-md)",
+              borderRadius: "var(--radius-md)",
+              backgroundColor: "var(--surface-raised)",
+              color: "var(--text-muted)",
+              border: "1px solid var(--divider)",
+              fontSize: "var(--text-body)",
+              fontWeight: "var(--font-weight-medium)",
+              cursor: "pointer",
+            }}
+          >
+            Cancel
+          </button>
+        ) : null}
       </div>
     </StepLayout>
   );

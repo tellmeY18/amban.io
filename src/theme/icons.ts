@@ -81,6 +81,12 @@ import {
   moonOutline,
   contrastOutline,
 
+  // ---- Income suggestion icons ----
+  briefcaseOutline,
+  codeSlashOutline,
+  storefrontOutline,
+  rocketOutline,
+
   // ---- Category icons (Appendix C) ----
   // Note: `housing` reuses `homeOutline` (already imported above).
   flashOutline,
@@ -166,6 +172,16 @@ export const Icons = {
     chart: statsChartOutline,
     analytics: analyticsOutline,
     pie: pieChartOutline,
+  },
+
+  income: {
+    briefcase: briefcaseOutline,
+    codeSlash: codeSlashOutline,
+    home: homeOutline,
+    storefront: storefrontOutline,
+    rocket: rocketOutline,
+    trendingUp: trendingUpOutline,
+    shieldCheckmark: shieldCheckmarkOutline,
   },
 
   theme: {

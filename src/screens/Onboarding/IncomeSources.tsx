@@ -32,6 +32,19 @@ import type { IncomeSource } from "../../stores/financeStore";
 import { Icons } from "../../theme/icons";
 import { formatINR } from "../../utils/formatters";
 
+/* ------------------------------------------------------------------ */
+/*  Quick-add suggestion chips for common Indian income types          */
+/* ------------------------------------------------------------------ */
+const INCOME_SUGGESTIONS = [
+  { label: "Salary", icon: Icons.income.briefcase },
+  { label: "Freelance", icon: Icons.income.codeSlash },
+  { label: "Rent Income", icon: Icons.income.home },
+  { label: "Business", icon: Icons.income.storefront },
+  { label: "Side Hustle", icon: Icons.income.rocket },
+  { label: "Investments", icon: Icons.income.trendingUp },
+  { label: "Pension", icon: Icons.income.shieldCheckmark },
+] as const;
+
 /**
  * Inline add-source form state. Kept local — we never store a draft
  * income source anywhere but the DB, so there's nothing to restore.
@@ -65,8 +78,16 @@ function validateDraft(draft: DraftSource): string | null {
 const IncomeRow: React.FC<{
   source: IncomeSource;
   onDelete: () => void;
-}> = ({ source, onDelete }) => (
+  onEdit: () => void;
+}> = ({ source, onDelete, onEdit }) => (
   <div
+    onClick={onEdit}
+    role="button"
+    tabIndex={0}
+    onKeyDown={(e) => {
+      if (e.key === "Enter" || e.key === " ") onEdit();
+    }}
+    aria-label={`Edit ${source.label}`}
     style={{
       display: "flex",
       alignItems: "center",
@@ -76,6 +97,7 @@ const IncomeRow: React.FC<{
       borderRadius: "var(--radius-md)",
       backgroundColor: "var(--surface-raised)",
       boxShadow: "var(--shadow-card)",
+      cursor: "pointer",
     }}
   >
     <div style={{ display: "flex", flexDirection: "column", minWidth: 0, flex: 1 }}>
@@ -104,7 +126,10 @@ const IncomeRow: React.FC<{
     </div>
     <button
       type="button"
-      onClick={onDelete}
+      onClick={(e) => {
+        e.stopPropagation();
+        onDelete();
+      }}
       aria-label={`Remove ${source.label}`}
       style={{
         minWidth: 40,
@@ -137,14 +162,26 @@ const IncomeSources: React.FC = () => {
   const history = useHistory();
   const sources = useFinanceStore((s) => s.incomeSources);
   const addIncomeSource = useFinanceStore((s) => s.addIncomeSource);
+  const updateIncomeSource = useFinanceStore((s) => s.updateIncomeSource);
   const deleteIncomeSource = useFinanceStore((s) => s.deleteIncomeSource);
 
   const [draft, setDraft] = useState<DraftSource>(EMPTY_DRAFT);
+  const [editingId, setEditingId] = useState<number | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const activeSources = sources.filter((s) => s.isActive);
   const canContinue = activeSources.length >= 1;
+
+  const handleEdit = (source: IncomeSource) => {
+    setEditingId(source.id);
+    setDraft({
+      label: source.label,
+      amount: source.amount,
+      creditDay: String(source.creditDay),
+    });
+    setFormError(null);
+  };
 
   const handleAdd = async () => {
     const err = validateDraft(draft);
@@ -155,12 +192,21 @@ const IncomeSources: React.FC = () => {
     setBusy(true);
     setFormError(null);
     try {
-      await addIncomeSource({
-        label: draft.label.trim(),
-        amount: draft.amount ?? 0,
-        creditDay: Number(draft.creditDay),
-        isActive: true,
-      });
+      if (editingId != null) {
+        await updateIncomeSource(editingId, {
+          label: draft.label.trim(),
+          amount: draft.amount ?? 0,
+          creditDay: Number(draft.creditDay),
+        });
+        setEditingId(null);
+      } else {
+        await addIncomeSource({
+          label: draft.label.trim(),
+          amount: draft.amount ?? 0,
+          creditDay: Number(draft.creditDay),
+          isActive: true,
+        });
+      }
       setDraft(EMPTY_DRAFT);
     } catch (e) {
       setFormError(e instanceof Error ? e.message : "Couldn't save. Try again.");
@@ -190,10 +236,53 @@ const IncomeSources: React.FC = () => {
               key={source.id}
               source={source}
               onDelete={() => void deleteIncomeSource(source.id)}
+              onEdit={() => handleEdit(source)}
             />
           ))}
         </div>
       ) : null}
+
+      {/* Quick-add suggestion chips */}
+      <div
+        style={{
+          display: "flex",
+          gap: "var(--space-xs)",
+          overflowX: "auto",
+          padding: "var(--space-xs) 0",
+          WebkitOverflowScrolling: "touch",
+        }}
+      >
+        {INCOME_SUGGESTIONS.map((s) => (
+          <button
+            key={s.label}
+            type="button"
+            onClick={() => setDraft((d) => ({ ...d, label: s.label }))}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4,
+              padding: "var(--space-xs) var(--space-sm)",
+              minHeight: 36,
+              borderRadius: "var(--radius-pill)",
+              border:
+                draft.label === s.label
+                  ? "1.5px solid var(--color-primary)"
+                  : "1.5px solid transparent",
+              backgroundColor:
+                draft.label === s.label ? "var(--color-primary-light)" : "var(--surface-raised)",
+              color: draft.label === s.label ? "var(--color-primary-dark)" : "var(--text-muted)",
+              fontSize: "var(--text-caption)",
+              fontWeight: "var(--font-weight-medium)",
+              cursor: "pointer",
+              whiteSpace: "nowrap",
+              flexShrink: 0,
+            }}
+          >
+            <IonIcon icon={s.icon} aria-hidden="true" />
+            {s.label}
+          </button>
+        ))}
+      </div>
 
       <div
         style={{
@@ -289,30 +378,70 @@ const IncomeSources: React.FC = () => {
           </p>
         ) : null}
 
-        <button
-          type="button"
-          onClick={handleAdd}
-          disabled={busy}
-          style={{
-            minHeight: "var(--hit-target-min)",
-            padding: "var(--space-sm) var(--space-md)",
-            borderRadius: "var(--radius-md)",
-            backgroundColor: "var(--color-primary-light)",
-            color: "var(--color-primary-dark)",
-            border: "none",
-            fontFamily: "var(--font-body)",
-            fontSize: "var(--text-body)",
-            fontWeight: "var(--font-weight-semibold)",
-            display: "inline-flex",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: "var(--space-xs)",
-            cursor: busy ? "not-allowed" : "pointer",
-          }}
-        >
-          <IonIcon icon={Icons.action.addCircle} aria-hidden="true" />
-          {busy ? "Adding…" : activeSources.length === 0 ? "Add income" : "Add another"}
-        </button>
+        <div style={{ display: "flex", gap: "var(--space-sm)" }}>
+          <button
+            type="button"
+            onClick={handleAdd}
+            disabled={busy}
+            style={{
+              flex: 1,
+              minHeight: "var(--hit-target-min)",
+              padding: "var(--space-sm) var(--space-md)",
+              borderRadius: "var(--radius-md)",
+              backgroundColor: "var(--color-primary-light)",
+              color: "var(--color-primary-dark)",
+              border: "none",
+              fontFamily: "var(--font-body)",
+              fontSize: "var(--text-body)",
+              fontWeight: "var(--font-weight-semibold)",
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: "var(--space-xs)",
+              cursor: busy ? "not-allowed" : "pointer",
+            }}
+          >
+            <IonIcon
+              icon={editingId != null ? Icons.action.checkOutline : Icons.action.addCircle}
+              aria-hidden="true"
+            />
+            {busy
+              ? "Saving…"
+              : editingId != null
+                ? "Save changes"
+                : activeSources.length === 0
+                  ? "Add income"
+                  : "Add another"}
+          </button>
+
+          {editingId != null ? (
+            <button
+              type="button"
+              onClick={() => {
+                setEditingId(null);
+                setDraft(EMPTY_DRAFT);
+                setFormError(null);
+              }}
+              style={{
+                minHeight: "var(--hit-target-min)",
+                padding: "var(--space-sm) var(--space-md)",
+                borderRadius: "var(--radius-md)",
+                backgroundColor: "var(--surface-raised)",
+                color: "var(--text-muted)",
+                border: "1px solid var(--color-divider)",
+                fontFamily: "var(--font-body)",
+                fontSize: "var(--text-body)",
+                fontWeight: "var(--font-weight-medium)",
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                cursor: "pointer",
+              }}
+            >
+              Cancel
+            </button>
+          ) : null}
+        </div>
       </div>
 
       {!canContinue ? (
