@@ -36,7 +36,6 @@ import {
   DEFAULT_RECURRING_CATEGORY,
 } from "../../constants/categories";
 import type { CategoryKey } from "../../constants/categories";
-import { UPCOMING_PAYMENT_WARN_DAYS } from "../../constants/insightThresholds";
 
 import { useFinanceStore } from "../../stores/financeStore";
 import type { RecurringPayment } from "../../stores/financeStore";
@@ -44,7 +43,11 @@ import { useAmbanScore } from "../../hooks/useAmbanScore";
 
 import { CATEGORY_ICONS, Icons } from "../../theme/icons";
 import { formatINR } from "../../utils/formatters";
-import { getActualDueDate, today as todayStartOfDay } from "../../utils/dateHelpers";
+import {
+  getActualDueDate,
+  isPaidThisCycle,
+  today as todayStartOfDay,
+} from "../../utils/dateHelpers";
 import { haptics } from "../../utils/haptics";
 
 function ordinalSuffix(day: number): string {
@@ -358,8 +361,12 @@ const MarkPaidSheet: React.FC<{
     if (draft == null || busy) return;
     setBusy(true);
     try {
-      await setBalance(draft);
+      // Mark as paid FIRST so the recurring payment's lastPaidDate is
+      // updated before setBalance triggers a re-render. If we did
+      // setBalance first, the intermediate render would see the old
+      // lastPaidDate and keep showing the "Mark as paid" button.
       if (payment) await markAsPaid(payment.id);
+      await setBalance(draft);
       void haptics.tapMedium();
       onDismiss();
     } finally {
@@ -529,10 +536,10 @@ const ManageRecurring: React.FC = () => {
               </span>
             </article>
           ) : (
-            rows.map(({ payment, daysUntil }) => {
+            rows.map(({ payment }) => {
               const cat = CATEGORY_BY_KEY[payment.category];
-              const showMarkPaid =
-                payment.isActive && daysUntil != null && daysUntil <= UPCOMING_PAYMENT_WARN_DAYS;
+              const paidThisCycle = isPaidThisCycle(payment.lastPaidDate, payment.dueDay, today);
+              const showMarkPaid = payment.isActive && !paidThisCycle;
               return (
                 <article
                   key={payment.id}
@@ -587,6 +594,7 @@ const ManageRecurring: React.FC = () => {
                         {formatINR(payment.amount)} on the {payment.dueDay}
                         {ordinalSuffix(payment.dueDay)}
                         {payment.isActive ? "" : " · Inactive"}
+                        {paidThisCycle ? " · Paid ✓" : ""}
                       </span>
                     </div>
                     <span
