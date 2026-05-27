@@ -18,10 +18,12 @@
  *     that want a custom header can omit `title` and render their own.
  *   - The sheet closes on backdrop tap by default; pass
  *     `dismissOnBackdrop={false}` for destructive confirms (Appendix I).
+ *   - Keyboard-aware: on native platforms, the sheet imperatively expands
+ *     to full height when the keyboard opens, and snaps back when it hides.
  */
 
 import { IonModal } from "@ionic/react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef } from "react";
 import type { ReactNode } from "react";
 
 import { Capacitor } from "@capacitor/core";
@@ -58,42 +60,13 @@ const DEFAULT_BREAKPOINTS = [0, 0.5, 1];
 const DEFAULT_INITIAL_BREAKPOINT = 0.5;
 
 /**
- * Hook that listens for keyboard show/hide events on native platforms.
- * Returns `true` while the keyboard is visible so the sheet can expand.
- */
-function useKeyboardVisible(): boolean {
-  const [visible, setVisible] = useState(false);
-
-  useEffect(() => {
-    if (!Capacitor.isNativePlatform()) return;
-
-    // Dynamically import to avoid loading the plugin on web.
-    let cleanup: (() => void) | undefined;
-
-    import("@capacitor/keyboard").then(({ Keyboard }) => {
-      const showHandle = Keyboard.addListener("keyboardWillShow", () => setVisible(true));
-      const hideHandle = Keyboard.addListener("keyboardWillHide", () => setVisible(false));
-
-      cleanup = () => {
-        showHandle.then((h) => h.remove());
-        hideHandle.then((h) => h.remove());
-      };
-    });
-
-    return () => cleanup?.();
-  }, []);
-
-  return visible;
-}
-
-/**
- * Premium-feeling bottom sheet. Keep the consumer API tight — if a screen
- * needs more control, it's usually a signal to refactor the composition,
- * not to widen this prop surface.
+ * Premium-feeling bottom sheet with keyboard awareness.
  *
- * Keyboard-aware: when the on-screen keyboard opens on native platforms,
- * the sheet automatically expands to full height so the input field
- * remains visible above the keyboard.
+ * When the on-screen keyboard opens on native platforms, the sheet
+ * imperatively expands to full height via `setCurrentBreakpoint(1)`.
+ * When the keyboard hides, it snaps back to the caller's initial breakpoint.
+ * This uses the IonModal ref's imperative API because Ionic does not
+ * respond to breakpoint prop changes after mount.
  */
 const BottomSheet: React.FC<BottomSheetProps> = ({
   open,
@@ -105,33 +78,47 @@ const BottomSheet: React.FC<BottomSheetProps> = ({
   "aria-label": ariaLabel,
   children,
 }) => {
-  // Reduce-motion is read on every render so OS-level flips take effect
-  // without remounting the provider tree. The cost is negligible.
+  const modalRef = useRef<HTMLIonModalElement>(null);
   const animated = !prefersReducedMotion();
-  const keyboardVisible = useKeyboardVisible();
 
-  // When the keyboard is visible, expand to full height so the input
-  // field isn't hidden behind the keyboard. The breakpoints array must
-  // always include the active breakpoint value.
-  const effectiveBreakpoint = keyboardVisible ? 1 : initialBreakpoint;
-  const effectiveBreakpoints = keyboardVisible ? [0, 1] : breakpoints;
+  // Keyboard-aware: expand to full height on keyboard show, snap back on hide.
+  // Uses the imperative `setCurrentBreakpoint()` API because Ionic ignores
+  // prop changes to `initialBreakpoint` after the modal is already open.
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform() || !open) return;
+
+    let cleanup: (() => void) | undefined;
+
+    import("@capacitor/keyboard").then(({ Keyboard }) => {
+      const showHandle = Keyboard.addListener("keyboardWillShow", () => {
+        modalRef.current?.setCurrentBreakpoint(1);
+      });
+      const hideHandle = Keyboard.addListener("keyboardWillHide", () => {
+        modalRef.current?.setCurrentBreakpoint(initialBreakpoint);
+      });
+
+      cleanup = () => {
+        showHandle.then((h) => h.remove());
+        hideHandle.then((h) => h.remove());
+      };
+    });
+
+    return () => cleanup?.();
+  }, [open, initialBreakpoint]);
 
   return (
     <IonModal
+      ref={modalRef}
       isOpen={open}
       onDidDismiss={onDismiss}
-      breakpoints={effectiveBreakpoints}
-      initialBreakpoint={effectiveBreakpoint}
+      breakpoints={breakpoints}
+      initialBreakpoint={initialBreakpoint}
       backdropDismiss={dismissOnBackdrop}
       handle
       animated={animated}
       aria-label={title ?? ariaLabel}
       style={
         {
-          // Expose the sheet surface via amban tokens so light/dark flips
-          // come for free. The Ionic bridge in variables.css handles most
-          // of this, but the sheet backdrop background is declared here
-          // explicitly because Ionic renders it on a different element.
           "--background": "var(--surface-raised)",
           "--color": "var(--text-strong)",
           "--border-radius": "var(--radius-xl) var(--radius-xl) 0 0",
@@ -148,10 +135,8 @@ const BottomSheet: React.FC<BottomSheetProps> = ({
           flexDirection: "column",
           gap: "var(--space-md)",
           padding: "var(--space-lg) var(--space-md)",
-          // Respect the home indicator / gesture area on iOS.
           paddingBottom: "calc(var(--space-lg) + env(safe-area-inset-bottom))",
           overflowY: "auto",
-          // The handle lives above this element; leave room for it.
           marginTop: "var(--space-sm)",
         }}
       >
