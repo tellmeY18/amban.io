@@ -419,3 +419,5 @@ v0.2.0 is in addition to (not a replacement for) the initial-release checklist a
 7. iOS build still compiles cleanly with all SMS surfaces gated off and no regressions in the existing Phase 13 surfaces.
 8. The `e2e-android` CI workflow is green: every row in Appendix K passes on the API 34 emulator, and the nightly extended matrix (API 23–34) has completed at least one clean run.
 9. A new contributor can clone the repo, start an emulator, and execute the full instrumented suite with `npm run build && npx cap sync android && cd android && ./gradlew connectedAndroidTest` — no manual setup beyond the emulator AVD.
+
+Sentiment analysis
