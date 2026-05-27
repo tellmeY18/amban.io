@@ -13,6 +13,7 @@ import BottomSheet from "../../components/ui/BottomSheet";
 import CurrencyInput from "../../components/ui/CurrencyInput";
 import { ledgerRepo } from "../../db/repositories";
 import type { LedgerRecord } from "../../db/repositories";
+import { useFinanceStore } from "../../stores/financeStore";
 import { Icons } from "../../theme/icons";
 import { formatINR } from "../../utils/formatters";
 import { haptics } from "../../utils/haptics";
@@ -70,6 +71,7 @@ function groupByDate(entries: LedgerRecord[]): DayGroup[] {
 
 const LedgerScreen: React.FC = () => {
   const history = useHistory();
+  const revertLedgerEntry = useFinanceStore((s) => s.revertLedgerEntry);
 
   const [entries, setEntries] = useState<LedgerRecord[]>([]);
   const [loading, setLoading] = useState(true);
@@ -407,6 +409,37 @@ const LedgerScreen: React.FC = () => {
                 }}
               >
                 Save
+              </button>
+
+              <button
+                type="button"
+                disabled={busy}
+                onClick={async () => {
+                  if (!editingEntry) return;
+                  setBusy(true);
+                  try {
+                    await revertLedgerEntry(editingEntry.id);
+                    void haptics.tapMedium();
+                    setEditingEntry(null);
+                    await loadEntries();
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+                style={{
+                  minHeight: 48,
+                  padding: "var(--space-sm) var(--space-md)",
+                  borderRadius: "var(--radius-md)",
+                  backgroundColor: "rgba(242, 153, 0, 0.12)",
+                  color: "var(--color-score-good)",
+                  border: "1px solid var(--color-score-good)",
+                  fontWeight: "var(--font-weight-semibold)",
+                  fontSize: "var(--text-body)",
+                  cursor: busy ? "wait" : "pointer",
+                  opacity: busy ? 0.6 : 1,
+                }}
+              >
+                ↩ Undo this transaction
               </button>
 
               <button

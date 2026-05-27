@@ -42,6 +42,7 @@ import {
   ledgerRepo,
   manualCreditsRepo,
   recurringPaymentsRepo,
+  spendEntriesRepo,
 } from "../db/repositories";
 import type {
   BalanceSnapshotRecord,
@@ -159,6 +160,20 @@ export interface FinanceActions {
   /** One-off income credits. */
   addManualCredit: (credit: Omit<ManualCredit, "id">) => Promise<ManualCredit>;
   deleteManualCredit: (id: number) => Promise<void>;
+
+  /**
+   * Fully revert a ledger entry — undo the financial side-effect AND
+   * remove the ledger row. Used from the Ledger screen as an "undo"
+   * action for accidental income credits, spends, etc.
+   *
+   * Depending on the entry type:
+   * - income_credit: clears last_credited_date on the income source,
+   *   reverts the balance snapshot, removes ledger entry.
+   * - spend: deletes the spend_entry, re-rolls the day, removes ledger.
+   * - manual_credit: deletes the manual_credit row, removes ledger.
+   * - balance_set: reverts to previous balance, removes ledger.
+   */
+  revertLedgerEntry: (ledgerEntryId: number) => Promise<void>;
 
   /**
    * Reset to initial state. In-memory only — the destructive reset
@@ -491,6 +506,97 @@ export const useFinanceStore = create<FinanceStore>((set) => ({
     await manualCreditsRepo.delete(id);
     const manualCredits = await refreshManualCredits();
     set((prev) => ({ ...prev, manualCredits }));
+  },
+
+  /* -----------------------------
+   * Ledger revert (undo)
+   * ----------------------------- */
+
+  revertLedgerEntry: async (ledgerEntryId) => {
+    const entry = await ledgerRepo.getById(ledgerEntryId);
+    if (!entry) return;
+
+    switch (entry.type) {
+      case "income_credit": {
+        // 1. Clear last_credited_date on the income source so it
+        //    appears in "Pending income" again.
+        if (entry.referenceType === "income_source" && entry.referenceId) {
+          await incomeSourcesRepo.markAsCredited(entry.referenceId, null);
+          // Setting null effectively "un-credits" — isCreditedThisCycle
+          // returns false when lastCreditedDate is null.
+        }
+
+        // 2. Revert the balance: insert a new snapshot with the balance
+        //    BEFORE this credit (balance_after - delta).
+        const revertedBalance = entry.balanceAfter - entry.delta;
+        await balanceSnapshotsRepo.insert({ amount: revertedBalance });
+
+        // 3. Remove the ledger entry (cascades balance recomputation).
+        await ledgerRepo.delete(entry.id);
+
+        // 4. Refresh stores.
+        const [incomeSources, balances] = await Promise.all([
+          refreshIncomeSources(),
+          refreshBalances(),
+        ]);
+        set((prev) => ({
+          ...prev,
+          incomeSources,
+          latestBalance: balances.latestBalance,
+          balanceHistory: balances.balanceHistory,
+        }));
+        break;
+      }
+
+      case "spend": {
+        // 1. Delete the spend_entry if it still exists.
+        if (entry.referenceType === "spend_entry" && entry.referenceId) {
+          const entryRecord = await spendEntriesRepo.getById(entry.referenceId);
+          if (entryRecord) {
+            await spendEntriesRepo.delete(entry.referenceId);
+            // Re-roll the day so daily_logs.spent is correct.
+            await spendEntriesRepo.rollUp(entryRecord.logDate);
+          }
+        }
+
+        // 2. Remove the ledger entry.
+        await ledgerRepo.delete(entry.id);
+        break;
+      }
+
+      case "manual_credit": {
+        // 1. Delete the manual_credit row.
+        if (entry.referenceType === "manual_credit" && entry.referenceId) {
+          await manualCreditsRepo.delete(entry.referenceId);
+        }
+
+        // 2. Remove the ledger entry.
+        await ledgerRepo.delete(entry.id);
+
+        // 3. Refresh.
+        const manualCredits = await refreshManualCredits();
+        set((prev) => ({ ...prev, manualCredits }));
+        break;
+      }
+
+      case "balance_set": {
+        // 1. Revert: set balance back to what it was before this set.
+        const previousBalance = entry.balanceAfter - entry.delta;
+        await balanceSnapshotsRepo.insert({ amount: previousBalance });
+
+        // 2. Remove the ledger entry.
+        await ledgerRepo.delete(entry.id);
+
+        // 3. Refresh.
+        const balances = await refreshBalances();
+        set((prev) => ({
+          ...prev,
+          latestBalance: balances.latestBalance,
+          balanceHistory: balances.balanceHistory,
+        }));
+        break;
+      }
+    }
   },
 
   /* -----------------------------

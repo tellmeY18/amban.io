@@ -379,7 +379,7 @@ export const incomeSourcesRepo = {
     });
   },
 
-  async markAsCredited(id: number, date: string): Promise<void> {
+  async markAsCredited(id: number, date: string | null): Promise<void> {
     await withDb(async (db) => {
       await db.run("UPDATE income_sources SET last_credited_date = ? WHERE id = ?;", [date, id]);
     });
@@ -1013,6 +1013,18 @@ export interface SpendEntryInput {
 }
 
 export const spendEntriesRepo = {
+  /**
+   * Get a single entry by ID. Used by ledger revert to find the
+   * entry's logDate for re-rolling.
+   */
+  async getById(id: number): Promise<SpendEntryRecord | null> {
+    return withDb(async (db) => {
+      const res = await db.query("SELECT * FROM spend_entries WHERE id = ?;", [id]);
+      const row = rows<SpendEntryRow>(res)[0];
+      return row ? mapSpendEntry(row) : null;
+    });
+  },
+
   /**
    * All entries for a single day, newest first. Fed by the compound
    * index on (log_date, spent_at DESC) so this is a pure index scan
