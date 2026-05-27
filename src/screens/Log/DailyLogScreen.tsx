@@ -955,6 +955,11 @@ const EntrySheet: React.FC<EntrySheetProps> = ({
         placeholder="Auto to office, groceries at Reliance…"
         maxLength={240}
         rows={2}
+        inputMode="text"
+        autoComplete="on"
+        autoCorrect="on"
+        autoCapitalize="sentences"
+        spellCheck={true}
         style={{
           width: "100%",
           minHeight: 60,
@@ -1145,6 +1150,11 @@ const ConfirmDaySheet: React.FC<ConfirmDaySheetProps> = ({
         placeholder="Heavy day. Friend's birthday dinner."
         maxLength={240}
         rows={2}
+        inputMode="text"
+        autoComplete="on"
+        autoCorrect="on"
+        autoCapitalize="sentences"
+        spellCheck={true}
         style={{
           width: "100%",
           minHeight: 60,

@@ -21,8 +21,10 @@
  */
 
 import { IonModal } from "@ionic/react";
+import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 
+import { Capacitor } from "@capacitor/core";
 import { prefersReducedMotion } from "../../utils/haptics";
 
 export interface BottomSheetProps {
@@ -56,9 +58,42 @@ const DEFAULT_BREAKPOINTS = [0, 0.5, 1];
 const DEFAULT_INITIAL_BREAKPOINT = 0.5;
 
 /**
+ * Hook that listens for keyboard show/hide events on native platforms.
+ * Returns `true` while the keyboard is visible so the sheet can expand.
+ */
+function useKeyboardVisible(): boolean {
+  const [visible, setVisible] = useState(false);
+
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return;
+
+    // Dynamically import to avoid loading the plugin on web.
+    let cleanup: (() => void) | undefined;
+
+    import("@capacitor/keyboard").then(({ Keyboard }) => {
+      const showHandle = Keyboard.addListener("keyboardWillShow", () => setVisible(true));
+      const hideHandle = Keyboard.addListener("keyboardWillHide", () => setVisible(false));
+
+      cleanup = () => {
+        showHandle.then((h) => h.remove());
+        hideHandle.then((h) => h.remove());
+      };
+    });
+
+    return () => cleanup?.();
+  }, []);
+
+  return visible;
+}
+
+/**
  * Premium-feeling bottom sheet. Keep the consumer API tight — if a screen
  * needs more control, it's usually a signal to refactor the composition,
  * not to widen this prop surface.
+ *
+ * Keyboard-aware: when the on-screen keyboard opens on native platforms,
+ * the sheet automatically expands to full height so the input field
+ * remains visible above the keyboard.
  */
 const BottomSheet: React.FC<BottomSheetProps> = ({
   open,
@@ -73,13 +108,20 @@ const BottomSheet: React.FC<BottomSheetProps> = ({
   // Reduce-motion is read on every render so OS-level flips take effect
   // without remounting the provider tree. The cost is negligible.
   const animated = !prefersReducedMotion();
+  const keyboardVisible = useKeyboardVisible();
+
+  // When the keyboard is visible, expand to full height so the input
+  // field isn't hidden behind the keyboard. The breakpoints array must
+  // always include the active breakpoint value.
+  const effectiveBreakpoint = keyboardVisible ? 1 : initialBreakpoint;
+  const effectiveBreakpoints = keyboardVisible ? [0, 1] : breakpoints;
 
   return (
     <IonModal
       isOpen={open}
       onDidDismiss={onDismiss}
-      breakpoints={breakpoints}
-      initialBreakpoint={initialBreakpoint}
+      breakpoints={effectiveBreakpoints}
+      initialBreakpoint={effectiveBreakpoint}
       backdropDismiss={dismissOnBackdrop}
       handle
       animated={animated}

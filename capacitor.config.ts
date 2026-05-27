@@ -14,6 +14,10 @@ const config: CapacitorConfig = {
     webContentsDebuggingEnabled: false,
   },
   plugins: {
+    Keyboard: {
+      resize: "ionic",
+      resizeOnFullScreen: true,
+    },
     SplashScreen: {
       launchShowDuration: 1000,
       launchAutoHide: true,

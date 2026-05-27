@@ -152,6 +152,11 @@ const EditSheet: React.FC<{
         maxLength={40}
         value={draft.label}
         onChange={(e) => setDraft((d) => ({ ...d, label: e.target.value }))}
+        inputMode="text"
+        autoComplete="on"
+        autoCorrect="on"
+        autoCapitalize="words"
+        spellCheck={true}
         style={{
           minHeight: "var(--hit-target-min)",
           padding: "var(--space-sm) var(--space-md)",

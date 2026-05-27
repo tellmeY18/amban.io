@@ -221,8 +221,11 @@ const AddIncomeSheet: React.FC<AddIncomeSheetProps> = ({
           value={label}
           onChange={(e) => setLabel(e.target.value)}
           placeholder="e.g. Freelance, Refund — Amazon, Gift from Dad"
-          autoComplete="off"
-          autoCorrect="off"
+          inputMode="text"
+          autoComplete="on"
+          autoCorrect="on"
+          autoCapitalize="words"
+          spellCheck={true}
           style={{
             width: "100%",
             minHeight: "var(--hit-target-min)",
