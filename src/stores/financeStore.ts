@@ -39,6 +39,7 @@ import {
   balanceSnapshotsRepo,
   dailyLogsRepo,
   incomeSourcesRepo,
+  ledgerRepo,
   manualCreditsRepo,
   recurringPaymentsRepo,
 } from "../db/repositories";
@@ -304,6 +305,17 @@ export const useFinanceStore = create<FinanceStore>((set) => ({
     // not an edit (see repositories.ts balanceSnapshotsRepo).
     await balanceSnapshotsRepo.insert({ amount });
 
+    // Write ledger entry: balance_set is always an absolute set,
+    // so delta = newAmount - previousLedgerBalance.
+    const previousBalance = await ledgerRepo.latestBalance();
+    const delta = amount - previousBalance;
+    await ledgerRepo.insert({
+      type: "balance_set",
+      delta,
+      balanceAfter: amount,
+      label: "Balance updated",
+    });
+
     const balances = await refreshBalances();
     set((prev) => ({
       ...prev,
@@ -399,6 +411,7 @@ export const useFinanceStore = create<FinanceStore>((set) => ({
     //    This matches what the user actually sees in their account.
     const currentState = useFinanceStore.getState();
     const source = currentState.incomeSources.find((s) => s.id === id);
+    let newBalance = 0;
     if (source && currentState.latestBalance) {
       const snapshotDate = currentState.latestBalance.recordedAt;
       const snapshotAmount = currentState.latestBalance.amount;
@@ -409,15 +422,27 @@ export const useFinanceStore = create<FinanceStore>((set) => ({
         manualCreditsRepo.sumSince(snapshotDate),
       ]);
       const effectiveBalance = snapshotAmount - spendSince + creditsSince;
-
-      // New snapshot = effective balance + income amount
-      await balanceSnapshotsRepo.insert({ amount: effectiveBalance + source.amount });
+      newBalance = effectiveBalance + source.amount;
+      await balanceSnapshotsRepo.insert({ amount: newBalance });
     } else if (source) {
       // No snapshot exists yet — just use the income amount as first snapshot.
-      await balanceSnapshotsRepo.insert({ amount: source.amount });
+      newBalance = source.amount;
+      await balanceSnapshotsRepo.insert({ amount: newBalance });
     }
 
-    // 3. Refresh both slices so score recalculates immediately.
+    // 3. Write ledger entry for the income credit.
+    if (source) {
+      await ledgerRepo.insert({
+        type: "income_credit",
+        delta: source.amount,
+        balanceAfter: newBalance,
+        label: source.label,
+        referenceType: "income_source",
+        referenceId: source.id,
+      });
+    }
+
+    // 4. Refresh both slices so score recalculates immediately.
     const [incomeSources, balances] = await Promise.all([
       refreshIncomeSources(),
       refreshBalances(),
@@ -436,6 +461,19 @@ export const useFinanceStore = create<FinanceStore>((set) => ({
 
   addManualCredit: async (credit) => {
     const id = await manualCreditsRepo.insert(credit);
+
+    // Write ledger entry for the manual credit.
+    const previousBalance = await ledgerRepo.latestBalance();
+    await ledgerRepo.insert({
+      type: "manual_credit",
+      delta: credit.amount,
+      balanceAfter: previousBalance + credit.amount,
+      label: credit.label,
+      referenceType: "manual_credit",
+      referenceId: id,
+      occurredAt: credit.creditedAt,
+    });
+
     const manualCredits = await refreshManualCredits();
     set((prev) => ({ ...prev, manualCredits }));
 
@@ -444,6 +482,12 @@ export const useFinanceStore = create<FinanceStore>((set) => ({
   },
 
   deleteManualCredit: async (id) => {
+    // Remove the ledger entry linked to this credit.
+    const ledgerEntry = await ledgerRepo.findByReference("manual_credit", id);
+    if (ledgerEntry) {
+      await ledgerRepo.delete(ledgerEntry.id);
+    }
+
     await manualCreditsRepo.delete(id);
     const manualCredits = await refreshManualCredits();
     set((prev) => ({ ...prev, manualCredits }));

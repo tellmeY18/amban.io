@@ -64,7 +64,7 @@
 
 import { create } from "zustand";
 
-import { dailyLogsRepo, spendEntriesRepo } from "../db/repositories";
+import { dailyLogsRepo, ledgerRepo, spendEntriesRepo } from "../db/repositories";
 import type {
   DailyLogInput,
   DailyLogRecord,
@@ -526,6 +526,18 @@ export const useDailyStore = create<DailyStore>((set, get) => ({
     // so subsequent rollups don't churn the value.
     await spendEntriesRepo.rollUp(repoInput.logDate, input.scoreAtLog ?? null);
 
+    // Write ledger entry for the spend.
+    const previousBalance = await ledgerRepo.latestBalance();
+    await ledgerRepo.insert({
+      type: "spend",
+      delta: -repoInput.amount,
+      balanceAfter: previousBalance - repoInput.amount,
+      label: repoInput.notes || repoInput.category || "Daily spend",
+      referenceType: "spend_entry",
+      referenceId: stored.id,
+      occurredAt: repoInput.logDate,
+    });
+
     const { logs, entries } = await refreshAll(get().loadedDays);
     set((prev) => ({ ...prev, logs, entries, ...deriveSlices(logs, entries) }));
 
@@ -533,21 +545,32 @@ export const useDailyStore = create<DailyStore>((set, get) => ({
   },
 
   updateEntry: async (id, patch) => {
-    // Find the entry first so we know which date to re-roll. Reading
-    // from the in-memory list keeps this off SQLite for the common
-    // case; if the entry isn't loaded (older than the window), we
-    // fall back to re-rolling today — the edit would have to have
-    // come from a history expand row that already widened the window.
-    const beforeDate = get().entries.find((e) => e.id === id)?.logDate ?? todayIsoDate();
+    // Find the entry first so we know which date to re-roll and the old amount.
+    const existingEntry = get().entries.find((e) => e.id === id);
+    const beforeDate = existingEntry?.logDate ?? todayIsoDate();
+    const oldAmount = existingEntry?.amount ?? 0;
 
     await spendEntriesRepo.update(id, patch);
-
-    // If the edit changed the spentAt to a different log_date we'd
-    // need to re-roll both dates. The current repo signature doesn't
-    // expose log_date as a patch field (spentAt is the timestamp,
-    // log_date is denormalised at insert time only), so we only need
-    // to re-roll the original date.
     await spendEntriesRepo.rollUp(beforeDate);
+
+    // Update the corresponding ledger entry if the amount changed.
+    if (patch.amount !== undefined && patch.amount !== oldAmount) {
+      const ledgerEntry = await ledgerRepo.findByReference("spend_entry", id);
+      if (ledgerEntry) {
+        await ledgerRepo.update(ledgerEntry.id, {
+          delta: -patch.amount,
+          label: patch.notes || patch.category || ledgerEntry.label,
+        });
+      }
+    } else if (patch.notes !== undefined || patch.category !== undefined) {
+      // Just update the label if only notes/category changed.
+      const ledgerEntry = await ledgerRepo.findByReference("spend_entry", id);
+      if (ledgerEntry) {
+        await ledgerRepo.update(ledgerEntry.id, {
+          label: patch.notes || patch.category || ledgerEntry.label,
+        });
+      }
+    }
 
     const { logs, entries } = await refreshAll(get().loadedDays);
     set((prev) => ({ ...prev, logs, entries, ...deriveSlices(logs, entries) }));
@@ -555,6 +578,12 @@ export const useDailyStore = create<DailyStore>((set, get) => ({
 
   deleteEntry: async (id) => {
     const affectedDate = get().entries.find((e) => e.id === id)?.logDate ?? todayIsoDate();
+
+    // Remove the ledger entry linked to this spend.
+    const ledgerEntry = await ledgerRepo.findByReference("spend_entry", id);
+    if (ledgerEntry) {
+      await ledgerRepo.delete(ledgerEntry.id);
+    }
 
     await spendEntriesRepo.delete(id);
     await spendEntriesRepo.rollUp(affectedDate);

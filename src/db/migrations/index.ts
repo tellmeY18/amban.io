@@ -38,6 +38,7 @@ import migration003 from "./003_schema_migrations.sql?raw";
 import migration004 from "./004_sms_suggestions.sql?raw";
 import migration005 from "./005_recurring_last_paid.sql?raw";
 import migration006 from "./006_income_last_credited.sql?raw";
+import migration007 from "./007_ledger.sql?raw";
 
 /**
  * Shape of a single catalogue entry. Consumed by the runner in db.ts
@@ -98,6 +99,12 @@ export const MIGRATION_CATALOG: ReadonlyArray<MigrationEntry> = [
     name: "income_last_credited",
     sql: migration006,
     checksum: computeChecksum(normaliseSQL(migration006)),
+  },
+  {
+    version: 7,
+    name: "ledger",
+    sql: migration007,
+    checksum: computeChecksum(normaliseSQL(migration007)),
   },
 ];
 

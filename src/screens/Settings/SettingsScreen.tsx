@@ -675,6 +675,12 @@ const SettingsScreen: React.FC = () => {
             onSelect={() => setBalanceOpen(true)}
           />
           <SettingsRow
+            icon={Icons.finance.chart}
+            label="Balance Ledger"
+            value="View all transactions"
+            onSelect={() => history.push("/settings/ledger")}
+          />
+          <SettingsRow
             icon={Icons.finance.cash}
             label="Manage income"
             value={`${activeIncomeCount} active`}

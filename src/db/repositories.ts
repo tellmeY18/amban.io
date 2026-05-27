@@ -1395,6 +1395,285 @@ export const settingsRepo = {
 } as const;
 
 /* ==================================================================
+ * ledger — unified balance audit trail
+ * ==================================================================
+ *
+ * Bank-statement-style log of every balance-changing event. Each row
+ * carries a signed delta and a running balance_after. Editing or
+ * deleting a row cascades recomputation to all subsequent entries.
+ * ================================================================== */
+
+export interface LedgerRecord {
+  id: number;
+  type: "income_credit" | "spend" | "balance_set" | "manual_credit";
+  delta: number;
+  balanceAfter: number;
+  label: string;
+  referenceType: string | null;
+  referenceId: number | null;
+  occurredAt: string;
+  createdAt: string;
+}
+
+interface LedgerRow {
+  id: number;
+  type: string;
+  delta: number;
+  balance_after: number;
+  label: string;
+  reference_type: string | null;
+  reference_id: number | null;
+  occurred_at: string;
+  created_at: string;
+}
+
+function mapLedger(row: LedgerRow): LedgerRecord {
+  return {
+    id: row.id,
+    type: row.type as LedgerRecord["type"],
+    delta: row.delta,
+    balanceAfter: row.balance_after,
+    label: row.label,
+    referenceType: row.reference_type,
+    referenceId: row.reference_id,
+    occurredAt: row.occurred_at,
+    createdAt: row.created_at,
+  };
+}
+
+export const ledgerRepo = {
+  /**
+   * List ledger entries newest-first, paginated.
+   */
+  async list(limit = 50, offset = 0): Promise<LedgerRecord[]> {
+    return withDb(async (db) => {
+      const res = await db.query(
+        "SELECT * FROM ledger ORDER BY occurred_at DESC, id DESC LIMIT ? OFFSET ?;",
+        [limit, offset],
+      );
+      return rows<LedgerRow>(res).map(mapLedger);
+    });
+  },
+
+  /**
+   * Get a single entry by ID.
+   */
+  async getById(id: number): Promise<LedgerRecord | null> {
+    return withDb(async (db) => {
+      const res = await db.query("SELECT * FROM ledger WHERE id = ?;", [id]);
+      const row = rows<LedgerRow>(res)[0];
+      return row ? mapLedger(row) : null;
+    });
+  },
+
+  /**
+   * Insert a new ledger entry. Returns the new ID.
+   */
+  async insert(entry: {
+    type: LedgerRecord["type"];
+    delta: number;
+    balanceAfter: number;
+    label: string;
+    referenceType?: string | null;
+    referenceId?: number | null;
+    occurredAt?: string;
+  }): Promise<number> {
+    const occurredAt = entry.occurredAt ?? new Date().toISOString().slice(0, 10);
+    const createdAt = new Date().toISOString();
+    return withDb(async (db) => {
+      const res = await db.run(
+        `INSERT INTO ledger (type, delta, balance_after, label, reference_type, reference_id, occurred_at, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?);`,
+        [
+          entry.type,
+          entry.delta,
+          entry.balanceAfter,
+          entry.label,
+          entry.referenceType ?? null,
+          entry.referenceId ?? null,
+          occurredAt,
+          createdAt,
+        ],
+      );
+      return coerceLastId(res.changes?.lastId);
+    });
+  },
+
+  /**
+   * Update an existing entry's delta and label. Triggers a cascade
+   * recomputation of all subsequent balance_after values.
+   * Returns the updated entry.
+   */
+  async update(id: number, patch: { delta?: number; label?: string }): Promise<void> {
+    await withDb(async (db) => {
+      const sets: string[] = [];
+      const values: unknown[] = [];
+
+      if (patch.delta !== undefined) {
+        sets.push("delta = ?");
+        values.push(patch.delta);
+      }
+      if (patch.label !== undefined) {
+        sets.push("label = ?");
+        values.push(patch.label);
+      }
+
+      if (sets.length === 0) return;
+      values.push(id);
+      await db.run(`UPDATE ledger SET ${sets.join(", ")} WHERE id = ?;`, values);
+    });
+
+    // Recompute balance_after for this entry and all subsequent entries
+    await this.recomputeBalancesFrom(id);
+  },
+
+  /**
+   * Delete an entry and recompute subsequent balances.
+   */
+  async delete(id: number): Promise<void> {
+    // Get the entry first to know its position in the timeline
+    const entry = await this.getById(id);
+    if (!entry) return;
+
+    await withDb(async (db) => {
+      await db.run("DELETE FROM ledger WHERE id = ?;", [id]);
+    });
+
+    // Recompute from the entry that was just before the deleted one
+    // Find the previous entry by occurred_at
+    const previous = await withDb(async (db) => {
+      const res = await db.query(
+        `SELECT * FROM ledger
+         WHERE (occurred_at < ? OR (occurred_at = ? AND id < ?))
+         ORDER BY occurred_at DESC, id DESC LIMIT 1;`,
+        [entry.occurredAt, entry.occurredAt, entry.id],
+      );
+      const row = rows<LedgerRow>(res)[0];
+      return row ? mapLedger(row) : null;
+    });
+
+    // Recompute all entries after the deleted one
+    const startBalance = previous?.balanceAfter ?? 0;
+    await this.recomputeBalancesAfterDate(entry.occurredAt, entry.id, startBalance);
+  },
+
+  /**
+   * Recompute balance_after for entry `id` and all entries that come after it chronologically.
+   */
+  async recomputeBalancesFrom(id: number): Promise<void> {
+    const entry = await this.getById(id);
+    if (!entry) return;
+
+    // Find the entry just before this one to get the starting balance
+    const previous = await withDb(async (db) => {
+      const res = await db.query(
+        `SELECT * FROM ledger
+         WHERE (occurred_at < ? OR (occurred_at = ? AND id < ?))
+         ORDER BY occurred_at DESC, id DESC LIMIT 1;`,
+        [entry.occurredAt, entry.occurredAt, entry.id],
+      );
+      const row = rows<LedgerRow>(res)[0];
+      return row ? mapLedger(row) : null;
+    });
+
+    const startBalance = previous?.balanceAfter ?? 0;
+
+    // Get all entries from this one forward (inclusive)
+    await withDb(async (db) => {
+      const res = await db.query(
+        `SELECT * FROM ledger
+         WHERE (occurred_at > ? OR (occurred_at = ? AND id >= ?))
+         ORDER BY occurred_at ASC, id ASC;`,
+        [entry.occurredAt, entry.occurredAt, entry.id],
+      );
+      const entries = rows<LedgerRow>(res);
+
+      let runningBalance = startBalance;
+      for (const row of entries) {
+        runningBalance += row.delta;
+        if (row.balance_after !== runningBalance) {
+          await db.run("UPDATE ledger SET balance_after = ? WHERE id = ?;", [
+            runningBalance,
+            row.id,
+          ]);
+        }
+      }
+    });
+  },
+
+  /**
+   * Recompute balances for all entries after a specific point.
+   * Used after deletions.
+   */
+  async recomputeBalancesAfterDate(
+    occurredAt: string,
+    afterId: number,
+    startBalance: number,
+  ): Promise<void> {
+    await withDb(async (db) => {
+      const res = await db.query(
+        `SELECT * FROM ledger
+         WHERE (occurred_at > ? OR (occurred_at = ? AND id > ?))
+         ORDER BY occurred_at ASC, id ASC;`,
+        [occurredAt, occurredAt, afterId],
+      );
+      const entries = rows<LedgerRow>(res);
+
+      let runningBalance = startBalance;
+      for (const row of entries) {
+        runningBalance += row.delta;
+        if (row.balance_after !== runningBalance) {
+          await db.run("UPDATE ledger SET balance_after = ? WHERE id = ?;", [
+            runningBalance,
+            row.id,
+          ]);
+        }
+      }
+    });
+  },
+
+  /**
+   * Get the latest balance_after (the current running balance).
+   * Returns 0 if the ledger is empty.
+   */
+  async latestBalance(): Promise<number> {
+    return withDb(async (db) => {
+      const res = await db.query(
+        "SELECT balance_after FROM ledger ORDER BY occurred_at DESC, id DESC LIMIT 1;",
+      );
+      const row = rows<{ balance_after: number }>(res)[0];
+      return row?.balance_after ?? 0;
+    });
+  },
+
+  /**
+   * Count total entries — used for pagination.
+   */
+  async count(): Promise<number> {
+    return withDb(async (db) => {
+      const res = await db.query("SELECT COUNT(*) AS c FROM ledger;");
+      const row = rows<{ c: number }>(res)[0];
+      return row?.c ?? 0;
+    });
+  },
+
+  /**
+   * Find a ledger entry by its reference (source table + id).
+   * Used when updating/deleting a spend entry to find its ledger counterpart.
+   */
+  async findByReference(referenceType: string, referenceId: number): Promise<LedgerRecord | null> {
+    return withDb(async (db) => {
+      const res = await db.query(
+        "SELECT * FROM ledger WHERE reference_type = ? AND reference_id = ? LIMIT 1;",
+        [referenceType, referenceId],
+      );
+      const row = rows<LedgerRow>(res)[0];
+      return row ? mapLedger(row) : null;
+    });
+  },
+};
+
+/* ==================================================================
  * Dev inspector
  * ==================================================================
  *
