@@ -273,6 +273,7 @@ export interface IncomeSourceRecord {
   amount: number;
   creditDay: number;
   isActive: boolean;
+  lastCreditedDate: string | null;
 }
 
 interface IncomeSourceRow {
@@ -281,6 +282,7 @@ interface IncomeSourceRow {
   amount: number;
   credit_day: number;
   is_active: number;
+  last_credited_date: string | null;
 }
 
 function mapIncomeSource(row: IncomeSourceRow): IncomeSourceRecord {
@@ -290,6 +292,7 @@ function mapIncomeSource(row: IncomeSourceRow): IncomeSourceRecord {
     amount: row.amount,
     creditDay: row.credit_day,
     isActive: toBool(row.is_active),
+    lastCreditedDate: row.last_credited_date ?? null,
   };
 }
 
@@ -373,6 +376,12 @@ export const incomeSourcesRepo = {
       const res = await db.query("SELECT is_active FROM income_sources WHERE id = ?;", [id]);
       const row = rows<{ is_active: number }>(res)[0];
       return toBool(row?.is_active ?? 0);
+    });
+  },
+
+  async markAsCredited(id: number, date: string): Promise<void> {
+    await withDb(async (db) => {
+      await db.run("UPDATE income_sources SET last_credited_date = ? WHERE id = ?;", [date, id]);
     });
   },
 

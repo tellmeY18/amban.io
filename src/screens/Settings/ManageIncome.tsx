@@ -119,6 +119,7 @@ const EditSheet: React.FC<{
         amount: draft.amount ?? 0,
         creditDay: Number(draft.creditDay),
         isActive: draft.isActive,
+        lastCreditedDate: null,
       });
       onDismiss();
     } catch (e) {

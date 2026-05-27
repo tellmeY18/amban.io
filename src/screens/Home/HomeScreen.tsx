@@ -29,6 +29,7 @@ import { IonContent, IonIcon, IonPage } from "@ionic/react";
 
 import ScoreCard from "./components/ScoreCard";
 import DailyLogPrompt from "./components/DailyLogPrompt";
+import EarlyIncomeCredit from "./components/EarlyIncomeCredit";
 import UpcomingPayments from "./components/UpcomingPayments";
 import InsightCarousel from "./components/InsightCarousel";
 import UpdateBanner from "./components/UpdateBanner";
@@ -475,6 +476,8 @@ const HomeScreen: React.FC = () => {
           <IncomeDayBanner visible={incomeDayPending} />
 
           <ScoreCard score={score} />
+
+          <EarlyIncomeCredit />
 
           <DailyLogPrompt />
 

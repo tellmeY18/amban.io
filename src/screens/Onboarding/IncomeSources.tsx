@@ -205,6 +205,7 @@ const IncomeSources: React.FC = () => {
           amount: draft.amount ?? 0,
           creditDay: Number(draft.creditDay),
           isActive: true,
+          lastCreditedDate: null,
         });
       }
       setDraft(EMPTY_DRAFT);

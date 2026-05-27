@@ -65,6 +65,8 @@ export interface IncomeSource {
   /** Day of month the income hits the account (1–31). */
   creditDay: number;
   isActive: boolean;
+  /** ISO date when the user last marked this source as received (early credit flow). */
+  lastCreditedDate: string | null;
 }
 
 export interface RecurringPayment {
@@ -143,6 +145,15 @@ export interface FinanceActions {
   /** Record that a recurring payment has been paid for the current cycle. */
   markRecurringAsPaid: (id: number) => Promise<void>;
 
+  /**
+   * Mark an income source as received early and auto-update balance.
+   * Records `last_credited_date = today` on the source, then appends a
+   * new balance snapshot of `currentBalance + source.amount`. The scoring
+   * engine will skip this source for the current cycle and target next
+   * month's credit day.
+   */
+  markIncomeAsCredited: (id: number) => Promise<void>;
+
   /** One-off income credits. */
   addManualCredit: (credit: Omit<ManualCredit, "id">) => Promise<ManualCredit>;
   deleteManualCredit: (id: number) => Promise<void>;
@@ -172,6 +183,7 @@ function toIncomeSource(record: IncomeSourceRecord): IncomeSource {
     amount: record.amount,
     creditDay: record.creditDay,
     isActive: record.isActive,
+    lastCreditedDate: record.lastCreditedDate,
   };
 }
 
@@ -373,6 +385,33 @@ export const useFinanceStore = create<FinanceStore>((set) => ({
     await recurringPaymentsRepo.markAsPaid(id, todayIso);
     const recurringPayments = await refreshRecurringPayments();
     set((prev) => ({ ...prev, recurringPayments }));
+  },
+
+  markIncomeAsCredited: async (id) => {
+    const todayIso = new Date().toISOString().slice(0, 10);
+
+    // 1. Mark the source as credited for this cycle.
+    await incomeSourcesRepo.markAsCredited(id, todayIso);
+
+    // 2. Auto-update balance: current + source amount.
+    const currentState = useFinanceStore.getState();
+    const source = currentState.incomeSources.find((s) => s.id === id);
+    if (source) {
+      const currentBalance = currentState.latestBalance?.amount ?? 0;
+      await balanceSnapshotsRepo.insert({ amount: currentBalance + source.amount });
+    }
+
+    // 3. Refresh both slices so score recalculates immediately.
+    const [incomeSources, balances] = await Promise.all([
+      refreshIncomeSources(),
+      refreshBalances(),
+    ]);
+    set((prev) => ({
+      ...prev,
+      incomeSources,
+      latestBalance: balances.latestBalance,
+      balanceHistory: balances.balanceHistory,
+    }));
   },
 
   /* -----------------------------

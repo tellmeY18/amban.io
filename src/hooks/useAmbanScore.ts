@@ -45,7 +45,11 @@ import {
   SCORE_GOOD_RATIO,
   SCORE_HEALTHY_RATIO,
 } from "../constants/insightThresholds";
-import { isPaidThisCycle, today as todayStartOfDay } from "../utils/dateHelpers";
+import {
+  isCreditedThisCycle,
+  isPaidThisCycle,
+  today as todayStartOfDay,
+} from "../utils/dateHelpers";
 import { calculateAmbanScore } from "../utils/scoring";
 import type { ScoreResult } from "../utils/scoring";
 import { useDailyStore } from "../stores/dailyStore";
@@ -325,7 +329,9 @@ export function useAmbanScore(): AmbanScoreResult {
 
     // Filter down to active rows here so every downstream calc treats
     // soft-deleted entries as non-existent.
-    const activeIncome = incomeSources.filter((s) => s.isActive);
+    const activeIncome = incomeSources.filter(
+      (s) => s.isActive && !isCreditedThisCycle(s.lastCreditedDate, s.creditDay, today),
+    );
     const activeRecurring = recurringPayments.filter(
       (p) => p.isActive && !isPaidThisCycle(p.lastPaidDate, p.dueDay, today),
     );

@@ -190,6 +190,36 @@ function toLocalIsoDate(date: Date): string {
 }
 
 /**
+ * True when an income source has already been marked as received for
+ * the billing cycle that contains the current `creditDay`. An income
+ * is considered "credited this cycle" if its `lastCreditedDate` falls
+ * after the *previous* occurrence of the same credit day — i.e. the
+ * user received it sometime between last month's credit date and this
+ * month's.
+ *
+ * Used by useAmbanScore to exclude already-received income from the
+ * "next income date" calculation, making the score look ahead to
+ * next month's credit day instead.
+ */
+export function isCreditedThisCycle(
+  lastCreditedDate: string | null,
+  creditDay: number,
+  today: Date,
+): boolean {
+  if (!lastCreditedDate) return false;
+
+  // The previous cycle's credit date (last month, clamped).
+  const prevMonthRef = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+  const prevCredit = getActualDueDate(creditDay, prevMonthRef);
+
+  const creditIso = lastCreditedDate.slice(0, 10); // normalise to YYYY-MM-DD
+  const prevCreditIso = toLocalIsoDate(prevCredit);
+
+  // Credited strictly after the previous credit date → covers the current cycle.
+  return creditIso > prevCreditIso;
+}
+
+/**
  * True when a recurring payment has already been marked as paid for
  * the billing cycle that contains `currentDueDate`. A payment is
  * considered "paid this cycle" if its `lastPaidDate` falls after the
