@@ -37,6 +37,7 @@ import { create } from "zustand";
 
 import {
   balanceSnapshotsRepo,
+  dailyLogsRepo,
   incomeSourcesRepo,
   manualCreditsRepo,
   recurringPaymentsRepo,
@@ -393,12 +394,27 @@ export const useFinanceStore = create<FinanceStore>((set) => ({
     // 1. Mark the source as credited for this cycle.
     await incomeSourcesRepo.markAsCredited(id, todayIso);
 
-    // 2. Auto-update balance: current + source amount.
+    // 2. Auto-update balance using EFFECTIVE balance (not raw snapshot).
+    //    Effective = latestSnapshot - spendSince + creditsSince.
+    //    This matches what the user actually sees in their account.
     const currentState = useFinanceStore.getState();
     const source = currentState.incomeSources.find((s) => s.id === id);
-    if (source) {
-      const currentBalance = currentState.latestBalance?.amount ?? 0;
-      await balanceSnapshotsRepo.insert({ amount: currentBalance + source.amount });
+    if (source && currentState.latestBalance) {
+      const snapshotDate = currentState.latestBalance.recordedAt;
+      const snapshotAmount = currentState.latestBalance.amount;
+
+      // Compute effective balance: snapshot - spend + manual credits
+      const [spendSince, creditsSince] = await Promise.all([
+        dailyLogsRepo.sumSpentAfter(snapshotDate),
+        manualCreditsRepo.sumSince(snapshotDate),
+      ]);
+      const effectiveBalance = snapshotAmount - spendSince + creditsSince;
+
+      // New snapshot = effective balance + income amount
+      await balanceSnapshotsRepo.insert({ amount: effectiveBalance + source.amount });
+    } else if (source) {
+      // No snapshot exists yet — just use the income amount as first snapshot.
+      await balanceSnapshotsRepo.insert({ amount: source.amount });
     }
 
     // 3. Refresh both slices so score recalculates immediately.

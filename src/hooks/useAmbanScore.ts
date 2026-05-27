@@ -329,9 +329,25 @@ export function useAmbanScore(): AmbanScoreResult {
 
     // Filter down to active rows here so every downstream calc treats
     // soft-deleted entries as non-existent.
-    const activeIncome = incomeSources.filter(
-      (s) => s.isActive && !isCreditedThisCycle(s.lastCreditedDate, s.creditDay, today),
-    );
+    const configuredActiveIncome = incomeSources.filter((s) => s.isActive);
+
+    // For scoring: if some sources are credited this cycle, they must
+    // still contribute to nextIncomeDate — but rolled forward to NEXT
+    // month. We achieve this by always passing all configured sources
+    // to the scorer. The scorer's getNextIncomeDate rolls forward any
+    // source whose creditDay <= today. For early-credited sources where
+    // creditDay > today (e.g. credited on 28th, creditDay=31st), we
+    // need to force the roll. We do this by setting their creditDay to
+    // today's date so the "<= today" check in getNextIncomeDate triggers
+    // the roll to next month.
+    const incomesForScoring = configuredActiveIncome.map((s) => {
+      if (isCreditedThisCycle(s.lastCreditedDate, s.creditDay, today)) {
+        // Force this source to look like "already passed this month"
+        // so getNextIncomeDate rolls it to next month.
+        return { ...s, creditDay: today.getDate() };
+      }
+      return s;
+    });
     const activeRecurring = recurringPayments.filter(
       (p) => p.isActive && !isPaidThisCycle(p.lastPaidDate, p.dueDay, today),
     );
@@ -354,10 +370,12 @@ export function useAmbanScore(): AmbanScoreResult {
     const balanceForScoring = currentBalance + creditsSinceSnapshot;
 
     // Pure math — everything the scorer needs is passed in explicitly.
+    // Use incomesForScoring (not activeIncome) so credited sources still
+    // contribute their next-month date to the daysLeft calculation.
     const scoreResult = calculateAmbanScore({
       currentBalance: balanceForScoring,
       spendSinceLastSnapshot,
-      incomeSources: activeIncome,
+      incomeSources: incomesForScoring,
       recurringPayments: activeRecurring,
       today,
     });
@@ -370,12 +388,15 @@ export function useAmbanScore(): AmbanScoreResult {
 
     // Warnings are composed after the score so the "projected-
     // negative" flag can ride off the scorer's authoritative output.
+    // Use configuredActiveIncome.length for the warning — the user HAS
+    // income sources configured; they've just all been credited this
+    // cycle. Don't tell them to "add an income source".
     const warnings = composeWarnings({
-      incomeSourcesCount: activeIncome.length,
+      incomeSourcesCount: configuredActiveIncome.length,
       latestBalance,
       scoreResult,
       logs,
-      incomeDayPending: isIncomeDayPending(activeIncome, latestBalance, today),
+      incomeDayPending: isIncomeDayPending(configuredActiveIncome, latestBalance, today),
       hasAnyHistory: logs.length > 0,
     });
 
