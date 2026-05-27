@@ -377,6 +377,11 @@ const LedgerScreen: React.FC = () => {
                   type="text"
                   value={editLabel}
                   onChange={(e) => setEditLabel(e.target.value)}
+                  inputMode="text"
+                  autoComplete="on"
+                  autoCorrect="on"
+                  autoCapitalize="words"
+                  spellCheck={true}
                   style={{
                     width: "100%",
                     minHeight: 44,

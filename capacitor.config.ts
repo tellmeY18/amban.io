@@ -10,13 +10,13 @@ const config: CapacitorConfig = {
   },
   android: {
     allowMixedContent: false,
-    captureInput: true,
     webContentsDebuggingEnabled: false,
   },
   plugins: {
     Keyboard: {
       resize: "ionic",
       resizeOnFullScreen: true,
+      style: "DARK",
     },
     SplashScreen: {
       launchShowDuration: 1000,

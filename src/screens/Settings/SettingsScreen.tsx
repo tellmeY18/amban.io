@@ -304,6 +304,11 @@ const ProfileSheet: React.FC<{
         maxLength={40}
         value={name}
         onChange={(e) => setName(e.target.value)}
+        inputMode="text"
+        autoComplete="name"
+        autoCorrect="on"
+        autoCapitalize="words"
+        spellCheck={true}
         style={{
           minHeight: "var(--hit-target-min)",
           padding: "var(--space-sm) var(--space-md)",

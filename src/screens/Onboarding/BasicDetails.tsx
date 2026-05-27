@@ -84,10 +84,11 @@ const BasicDetails: React.FC = () => {
         id="onboarding-name"
         type="text"
         autoFocus
+        inputMode="text"
         autoComplete="given-name"
         autoCapitalize="words"
-        autoCorrect="off"
-        spellCheck={false}
+        autoCorrect="on"
+        spellCheck={true}
         enterKeyHint="next"
         maxLength={40}
         placeholder="Arjun"
